@@ -1,19 +1,22 @@
-chibi-scheme (0.9.1-4) UNRELEASED; urgency=medium
+chibi-scheme (0.12-0.1) UNRELEASED; urgency=medium
 
+  * Non-maintainer upload.
+  * New upstream version 0.12
   * Drop d/libchibi-scheme-ffi.lintian-overrides:
     - It contained two overrides, one was an alien tag and the other was
       unused.
   * debian/control:
     - Fix binNMU-unsafe dependency (chibi-scheme-images -> chibi-scheme).
     - Bump Standards-Version to 4.7.4
-    - Remove `Priority: optional`: this is the default now
-    - Remove `Rules-Requires-Root: no`: this is the default now
+    - Remove `Priority: optional`: this is the default now.
+    - Remove `Rules-Requires-Root: no`: this is the default now.
   * debian/watch: Upgrade to version 5
+  * debian/libchibi-scheme0.symbols: Regenerate file to add 11 new symbols.
 
   [ Barak A. Pearlmutter ]
   * Add chibi-scheme dependency to chibi-scheme-images
 
- -- Shriram Ravindranathan <s20n@ters.dev>  Sun, 26 Apr 2026 17:56:47 +0530
+ -- Shriram Ravindranathan <s20n@ters.dev>  Sat, 02 May 2026 09:27:48 +0530
 
 chibi-scheme (0.9.1-3) unstable; urgency=medium
 

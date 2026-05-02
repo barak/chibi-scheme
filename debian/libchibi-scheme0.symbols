@@ -79,10 +79,13 @@ libchibi-scheme.so.0 libchibi-scheme0 #MINVER#
  sexp_current_module_path_op@Base 0.8.0
  sexp_define_foreign_aux@Base 0.8.0
  sexp_define_foreign_param_aux@Base 0.8.0
+ sexp_define_foreign_proc_aux@Base 0.12
  sexp_destroy_context@Base 0.8.0
  sexp_div@Base 0.8.0
  sexp_dk@Base 0.8.0
  sexp_double_to_bignum@Base 0.8.0
+ sexp_double_to_half@Base 0.12
+ sexp_double_to_quarter@Base 0.12
  sexp_double_to_ratio@Base 0.8.0
  sexp_double_to_ratio_2@Base 0.9.0
  sexp_emit@Base 0.8.0
@@ -134,7 +137,9 @@ libchibi-scheme.so.0 libchibi-scheme0 #MINVER#
  sexp_get_output_string_op@Base 0.8.0
  sexp_get_port_fileno@Base 0.8.0
  sexp_get_port_fold_case@Base 0.8.0
+ sexp_get_stack_trace@Base 0.12
  sexp_grow_heap@Base 0.8.0
+ sexp_half_to_double@Base 0.12
  sexp_id_name@Base 0.8.0
  sexp_identifier_eq_op@Base 0.8.0
  sexp_identifierp_op@Base 0.8.0
@@ -175,8 +180,10 @@ libchibi-scheme.so.0 libchibi-scheme0 #MINVER#
  sexp_make_fileno_op@Base 0.8.0
  sexp_make_flonum@Base 0.8.0
  sexp_make_foreign@Base 0.8.0
+ sexp_make_foreign_proc@Base 0.12
  sexp_make_getter_op@Base 0.8.0
  sexp_make_heap@Base 0.8.0
+ sexp_make_immutable_op@Base 0.12
  sexp_make_input_port@Base 0.8.0
  sexp_make_integer@Base 0.8.0
  sexp_make_integer_from_lsint@Base 0.9.0
@@ -228,8 +235,11 @@ libchibi-scheme.so.0 libchibi-scheme0 #MINVER#
  sexp_preserve_object@Base 0.8.0
  sexp_primitive_opcodes@Base 0.8.0
  sexp_print_exception_op@Base 0.8.0
+ sexp_print_exception_stack_trace_op@Base 0.12
+ sexp_print_extracted_stack_trace@Base 0.12
  sexp_push_op@Base 0.8.0
  sexp_push_utf8_char@Base 0.8.0
+ sexp_quarter_to_double@Base 0.12
  sexp_quotient@Base 0.8.0
  sexp_range_exception@Base 0.8.0
  sexp_ratio_add@Base 0.8.0
@@ -312,6 +322,7 @@ libchibi-scheme.so.0 libchibi-scheme0 #MINVER#
  sexp_type_exception@Base 0.8.0
  sexp_type_slot_offset_op@Base 0.8.0
  sexp_user_exception@Base 0.8.0
+ sexp_user_exception_ls@Base 0.12
  sexp_utf8_char_byte_count@Base 0.8.0
  sexp_utf8_encode_char@Base 0.8.0
  sexp_utf8_initial_byte_count@Base 0.8.0
