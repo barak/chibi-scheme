@@ -7,10 +7,10 @@ Subject: spelling
  1 file changed, 1 insertion(+), 1 deletion(-)
 
 diff --git a/lib/srfi/166/write.scm b/lib/srfi/166/write.scm
-index 7c58eae..2edb867 100644
+index d37f981..45b626a 100644
 --- a/lib/srfi/166/write.scm
 +++ b/lib/srfi/166/write.scm
-@@ -477,7 +477,7 @@
+@@ -495,7 +495,7 @@
              (else
               (displayed (write-to-string obj))))))))))
  

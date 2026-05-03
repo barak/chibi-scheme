@@ -15,11 +15,15 @@ chibi-scheme (0.12-0.1) UNRELEASED; urgency=medium
   * debian/libchibi-scheme0.symbols:
     - Regenerate file to add 11 new symbols.
     - Mark arch-dependent symbols as (optional) to fix 32bit builds.
+  * debian/patches/*:
+    - Add 0016-fix-reproducible-builds.patch to remove volatile memory
+      addresses and timestamps from documentation for reproducible builds.
+    - Refresh patches.
 
   [ Barak A. Pearlmutter ]
   * Add chibi-scheme dependency to chibi-scheme-images
 
- -- Shriram Ravindranathan <s20n@ters.dev>  Sat, 02 May 2026 09:27:48 +0530
+ -- Shriram Ravindranathan <s20n@ters.dev>  Sun, 03 May 2026 20:37:49 +0530
 
 chibi-scheme (0.9.1-3) unstable; urgency=medium
 

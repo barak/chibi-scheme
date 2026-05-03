@@ -1,0 +1,65 @@
+From: Shriram Ravindranathan <s20n@ters.dev>
+Date: Sun, 3 May 2026 19:09:27 +0530
+Subject: Fix reproducible builds by scrubbing volatile output
+
+Suppressed memory addresses in documentation and timing metrics
+in test outputs when SOURCE_DATE_EPOCH is set. This ensures the
+chibi-scheme-doc package builds reproducibly.
+
+Forwarded: not-needed
+Author: Shriram Ravindranathan <s20n@ters.dev>
+Last-Update: 2026-05-03
+---
+ lib/chibi/csv.scm  | 7 ++++---
+ lib/chibi/doc.scm  | 4 +---
+ lib/chibi/test.scm | 4 +++-
+ 3 files changed, 8 insertions(+), 7 deletions(-)
+
+diff --git a/lib/chibi/csv.scm b/lib/chibi/csv.scm
+index d5c572d..f2967e5 100644
+--- a/lib/chibi/csv.scm
++++ b/lib/chibi/csv.scm
+@@ -37,9 +37,10 @@
+ ;;> Example Gecos grammar:
+ ;;>
+ ;;> \example{
+-;;> (csv-grammar
+-;;>   '((separator-chars #\\:)
+-;;>     (quote-char . #f)))
++;;> (csv-grammar?
++;;>   (csv-grammar
++;;>     '((separator-chars #\\:)
++;;>       (quote-char . #f))))
+ ;;> }
+ (define (csv-grammar spec)
+   (let ((grammar (make-csv-grammar '(#\,) #\" #t #f 'lax '() #f #f)))
+diff --git a/lib/chibi/doc.scm b/lib/chibi/doc.scm
+index c084704..db967d8 100644
+--- a/lib/chibi/doc.scm
++++ b/lib/chibi/doc.scm
+@@ -343,9 +343,7 @@
+ 
+ (define (expand-author sxml env)
+   `(div (@ (id . "notes"))
+-        ,@(map (lambda (x) (expand-docs x env)) (cdr sxml))
+-        (br)
+-        ,(seconds->string (current-seconds))))
++        ,@(map (lambda (x) (expand-docs x env)) (cdr sxml))))
+ 
+ (define (expand-code sxml env)
+   (let* ((hl (if (and (pair? (cdr sxml)) (eq? 'language: (cadr sxml)))
+diff --git a/lib/chibi/test.scm b/lib/chibi/test.scm
+index e26516e..0a57997 100644
+--- a/lib/chibi/test.scm
++++ b/lib/chibi/test.scm
+@@ -802,7 +802,9 @@
+         (display
+          (string-append
+           (plural " test" pass) " passed in "
+-          (number->string duration) " seconds"
++          (if (get-environment-variable "SOURCE_DATE_EPOCH")
++              ""
++              (string-append " in " (number->string duration) " seconds"))
+           (cond
+            ((zero? skip) "")
+            (else (string-append " (" (number->string skip)
