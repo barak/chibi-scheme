@@ -1,5 +1,6 @@
 chibi-scheme (0.12-0.1) UNRELEASED; urgency=medium
 
+  [ Shriram Ravindranathan]
   * Non-maintainer upload.
   * New upstream version 0.12
   * Drop d/libchibi-scheme-ffi.lintian-overrides:
@@ -11,7 +12,9 @@ chibi-scheme (0.12-0.1) UNRELEASED; urgency=medium
     - Remove `Priority: optional`: this is the default now.
     - Remove `Rules-Requires-Root: no`: this is the default now.
   * debian/watch: Upgrade to version 5
-  * debian/libchibi-scheme0.symbols: Regenerate file to add 11 new symbols.
+  * debian/libchibi-scheme0.symbols:
+    - Regenerate file to add 11 new symbols.
+    - Mark arch-dependent symbols as (optional) to fix 32bit builds.
 
   [ Barak A. Pearlmutter ]
   * Add chibi-scheme dependency to chibi-scheme-images
