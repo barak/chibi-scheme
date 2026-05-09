@@ -3,7 +3,7 @@ Upstream-Name: chibi-scheme
 Source: https://github.com/ashinn/chibi-scheme/
 
 Files: *
-Copyright: 2004-2018 Alex Shinn
+Copyright: 2004-2025 Alex Shinn
 License: BSD-3-clause
 
 Files: benchmarks/gabriel/maze.sch benchmarks/gabriel/maze2.sch
@@ -67,8 +67,28 @@ Files: lib/srfi/165.scm lib/srfi/165.sld
 Copyright: 2019 Marc Nieper-Wißkirchen
 License: Expat
 
+Files: lib/chibi/char-set/boundary.sld
+ lib/chibi/match/match.scm
+ lib/chibi/snow/commands.scm
+ lib/scheme/division.scm
+ lib/srfi/38.scm
+ tools/snow-chibi.scm
+Copyright: 2009-2014 Alex Shinn
+License: public-domain
+ Public Domain.  All warranties are disclaimed.
+
+Files: lib/srfi/64.scm
+Copyright:
+ 2005-2013 Per Bothner
+ 2005 Alex Shinn
+ 2012 Álvaro Castro-Castilla
+ 2014 Mark H Weaver <mhw@netris.org>
+ 2023 Ekaitz Zarraga
+License: Expat
+
 Files: debian/*
 Copyright: 2019 Alexei Lozovsky <me@ilammy.net>
+ 2026 Shriram Ravindranathan <s20n@ters.dev>
 License: BSD-3-clause
 
 License: BSD-3-clause
