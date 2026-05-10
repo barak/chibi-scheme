@@ -1,6 +1,8 @@
 Source: chibi-scheme
 Section: lisp
-Maintainer: Barak A. Pearlmutter <bap@debian.org>
+Maintainer: Debian Scheme Dream Team <debian-scheme@lists.debian.org>
+Uploaders: Barak A. Pearlmutter <bap@debian.org>,
+	   Shriram Ravindranathan <s20n@ters.dev>
 Build-Depends: debhelper-compat (= 13)
 Standards-Version: 4.7.4
 Homepage: https://github.com/ashinn/chibi-scheme

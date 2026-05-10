@@ -1,7 +1,6 @@
-chibi-scheme (0.12-0.1) UNRELEASED; urgency=medium
+chibi-scheme (0.12-1) unstable; urgency=medium
 
-  [ Shriram Ravindranathan]
-  * Non-maintainer upload.
+  [ Shriram Ravindranathan ]
   * New upstream version 0.12
   * Drop d/libchibi-scheme-ffi.lintian-overrides:
     - It contained two overrides, one was an alien tag and the other was
@@ -25,8 +24,9 @@ chibi-scheme (0.12-0.1) UNRELEASED; urgency=medium
 
   [ Barak A. Pearlmutter ]
   * Add chibi-scheme dependency to chibi-scheme-images
+  * Standardize maintenance team in d/control and add Shriram Ravindranathan
 
- -- Shriram Ravindranathan <s20n@ters.dev>  Sat, 09 May 2026 12:04:55 +0530
+ -- Barak A. Pearlmutter <bap@debian.org>  Sun, 10 May 2026 16:03:49 +0100
 
 chibi-scheme (0.9.1-3) unstable; urgency=medium
 
