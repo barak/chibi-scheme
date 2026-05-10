@@ -6,24 +6,20 @@ Files: *
 Copyright: 2004-2025 Alex Shinn
 License: BSD-3-clause
 
+Files: gc_heap.c include/chibi/gc_heap.h
+Copyright: 2016 Chris Walsh <chris.walsh@creekware.com>
+License: BSD-3-clause
+
+Files: contrib/scheme-keywords.el
+Copyright: 2015 Frère Jérôme
+License: BSD-3-clause
+
 Files: benchmarks/gabriel/maze.sch benchmarks/gabriel/maze2.sch
 Copyright: 1995 Olin Shivers <shivers@ccs.neu.edu>
 License: permissive
  It's hard to determine the license as it's never explicitly specified. But
  given the author's background in academia it it permissive. The source code
  can be obtained at https://www.ccs.neu.edu/home/shivers/mazes.html
-
-Files: contrib/scheme-keywords.el
-Copyright: 2015 Frère Jérôme
-License: BSD-3-clause
-
-Files: gc_heap.c include/chibi/gc_heap.h
-Copyright: 2016 Chris Walsh <chris.walsh@creekware.com>
-License: BSD-3-clause
-
-Files: lib/chibi/crypto/sha2-native.scm lib/chibi/crypto/sha2.c
-Copyright: 2015 Alexei Lozovsky <a.lozovsky@gmail.com>
-License: BSD-3-clause
 
 Files: lib/chibi/json.c lib/chibi/json.scm lib/chibi/json.sld lib/chibi/json-test.sld
 Copyright: 2020 Alex Shinn
@@ -33,10 +29,6 @@ License: BSD-3-clause
 Files: lib/scheme/time.c lib/scheme/time.sld lib/scheme/time/tai-to-utc-offset.sld lib/scheme/time/tai.sld
 Copyright: 2012 Alan Watson
 License: BSD-3-clause
-
-Files: lib/srfi/41/test.sld
-Copyright: 2007 Philip L. Bewig
-License: Expat
 
 Files: lib/srfi/101.scm lib/srfi/101/test.sld
 Copyright: 2009 David Van Horn
@@ -55,16 +47,33 @@ Files: lib/srfi/146.sld lib/srfi/146/hash-test.sld lib/srfi/146/hash.scm lib/srf
 Copyright: 2016 Marc Nieper-Wißkirchen
 License: Expat
 
-Files: lib/srfi/146/hamt-map-test.scm lib/srfi/146/hamt-map.scm lib/srfi/146/hamt-misc-test.scm lib/srfi/146/hamt-misc.scm lib/srfi/146/hamt-test.scm lib/srfi/146/hamt.scm lib/srfi/146/vector-edit-test.scm lib/srfi/146/vector-edit.scm
-Copyright: 2014 Arthur A. Gleckler
-License: Expat
-
 Files: lib/srfi/154.scm lib/srfi/154.sld
 Copyright: 2017 Marc Nieper-Wißkirchen
 License: Expat
 
 Files: lib/srfi/165.scm lib/srfi/165.sld
 Copyright: 2019 Marc Nieper-Wißkirchen
+License: Expat
+
+Files: lib/srfi/64.scm
+Copyright:
+ 2005-2013 Per Bothner
+ 2005 Alex Shinn
+ 2012 Álvaro Castro-Castilla
+ 2014 Mark H Weaver <mhw@netris.org>
+ 2023 Ekaitz Zarraga
+License: Expat
+
+Files: lib/chibi/crypto/sha2-native.scm lib/chibi/crypto/sha2.c
+Copyright: 2015 Alexei Lozovsky <a.lozovsky@gmail.com>
+License: BSD-3-clause
+
+Files: lib/srfi/41/test.sld
+Copyright: 2007 Philip L. Bewig
+License: Expat
+
+Files: lib/srfi/146/hamt-map-test.scm lib/srfi/146/hamt-map.scm lib/srfi/146/hamt-misc-test.scm lib/srfi/146/hamt-misc.scm lib/srfi/146/hamt-test.scm lib/srfi/146/hamt.scm lib/srfi/146/vector-edit-test.scm lib/srfi/146/vector-edit.scm
+Copyright: 2014 Arthur A. Gleckler
 License: Expat
 
 Files: lib/chibi/char-set/boundary.sld
@@ -77,15 +86,6 @@ Copyright: 2009-2014 Alex Shinn
 License: public-domain
  Public Domain.  All warranties are disclaimed.
 
-Files: lib/srfi/64.scm
-Copyright:
- 2005-2013 Per Bothner
- 2005 Alex Shinn
- 2012 Álvaro Castro-Castilla
- 2014 Mark H Weaver <mhw@netris.org>
- 2023 Ekaitz Zarraga
-License: Expat
-
 Files: debian/*
 Copyright: 2019 Alexei Lozovsky <me@ilammy.net>
  2026 Shriram Ravindranathan <s20n@ters.dev>
@@ -95,7 +95,7 @@ License: BSD-3-clause
  Redistribution and use in source and binary forms, with or without
  modification, are permitted provided that the following conditions
  are met:
- . 
+ .
  1. Redistributions of source code must retain the above copyright
     notice, this list of conditions and the following disclaimer.
  .

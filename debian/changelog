@@ -25,6 +25,7 @@ chibi-scheme (0.12-1) unstable; urgency=medium
   [ Barak A. Pearlmutter ]
   * Add chibi-scheme dependency to chibi-scheme-images
   * Standardize maintenance team in d/control and add Shriram Ravindranathan
+  * Reorder Files paragraphs in debian/copyright by directory depth.
 
  -- Barak A. Pearlmutter <bap@debian.org>  Sun, 10 May 2026 16:03:49 +0100
 
