@@ -112,19 +112,19 @@
     (if (memq (car x) '(only except rename))
         (let* ((mod-name+imports (%resolve-import (cadr x)))
                (imp-ids (or (cdr mod-name+imports)
-                            (and (not (eq? 'only (car x)))
-                                 (module-exports
-                                  (find-module (car mod-name+imports)))))))
+                            (module-exports (find-module (car mod-name+imports))))))
           (cons (car mod-name+imports)
                 (case (car x)
                   ((only)
-                   (if imp-ids
-                       (map (lambda (imp) (or (assq imp imp-ids) imp))
-                            (cddr x))
-                       (cddr x)))
+                   (map (lambda (imp)
+                          (if (or (boolean? imp-ids) (memq imp imp-ids))
+                              imp
+                              (error "importing unknown binding" imp imp-ids)))
+                        (cddr x)))
                   ((except)
                    (id-filter (lambda (i) (not (memq i (cddr x)))) imp-ids))
                   ((rename)
+                   ;; TODO: warn about renaming an unimported id
                    (map (lambda (i)
                           (let ((rename (assq (to-id i) (cddr x))))
                             (if rename (cons (cadr rename) (from-id i)) i)))
@@ -230,7 +230,7 @@
       (warn-undefs env #f)
       env))))
 
-(define (environment . ls)
+(define (mutable-environment . ls)
   (let ((env (make-environment)))
     (for-each
      (lambda (m)
@@ -240,14 +240,19 @@
      ls)
     env))
 
+(define (environment . ls)
+  (let ((env (apply mutable-environment ls)))
+    (make-immutable! env)
+    env))
+
 (define (load-module name)
   (let ((mod (find-module name)))
     (if (and mod (not (module-env mod)))
         (module-env-set! mod (eval-module name mod)))
     mod))
 
-(%define-syntax meta-begin begin)
-(%define-syntax meta-define define)
+(define-syntax meta-begin begin)
+(define-syntax meta-define define)
 
 (define define-library-transformer
   (er-macro-transformer
@@ -437,6 +442,9 @@
                          res)))
               (else
                (error "couldn't find module" (car ls))))))))))))
+
+;; This will be redefined in main.c.
+(define raw-script-file #f)
 
 ;; capture a static copy of the current environment to serve
 ;; as the (chibi) module

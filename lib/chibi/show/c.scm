@@ -398,6 +398,11 @@
         ((null? x) #f)
         (else x)))
 
+(define (list-without-dot x)
+  (let lp ((ls x) (res '()))
+    (cond ((pair? ls) (lp (cdr ls) (cons (car ls) res)))
+          (else (reverse res)))))
+
 (define (replace-tree from to x)
   (let replace ((x x))
     (cond ((eq? x from) to)
@@ -422,7 +427,9 @@
                                (in-macro? (pair? x))
                                (macro-vars
                                 (map (lambda (v) (if (pair? v) (cadr v) v))
-                                     (if (pair? x) x (list x))))
+                                     (if (pair? x)
+                                         (list-without-dot x)
+                                         (list x))))
                                (op 'zero))
                           (c-in-expr (apply c-begin body)))))
                 "")))
@@ -577,23 +584,28 @@
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;; data structures
 
+;; Either a type declaration (struct [name] body ...) or just a type
+;; reference (struct name).
 (define (c-struct/aux type x . o)
   (let* ((name (if (null? o) (if (or (symbol? x) (string? x)) x #f) x))
-         (body (if name (car o) x))
+         (body (if name (if (pair? o) (car o) '()) x))
          (o (if (null? o) o (cdr o))))
-    (c-wrap-stmt
-     (each
-      (c-braced-block
-       (each type
-             (if (and name (not (equal? name "")))
-                 (each " " name)
-                 nothing))
-       (each
-        (c-in-stmt
-         (if (list? body)
-             (apply c-begin (map c-wrap-stmt (map c-param body)))
-             (c-wrap-stmt (c-expr body))))))
-      (if (pair? o) (each " " (apply c-begin o)) nothing)))))
+    (if (null? body)
+        (c-wrap-stmt
+         (each type (if (and name (not (equal? name ""))) (each " " name) "")))
+        (c-wrap-stmt
+         (each
+          (c-braced-block
+           (each type
+                 (if (and name (not (equal? name "")))
+                     (each " " name)
+                     nothing))
+           (each
+            (c-in-stmt
+             (if (list? body)
+                 (apply c-begin (map c-wrap-stmt (map c-param body)))
+                 (c-wrap-stmt (c-expr body))))))
+          (if (pair? o) (each " " (apply c-begin o)) nothing))))))
 
 (define (c-struct . args) (apply c-struct/aux "struct" args))
 (define (c-union . args) (apply c-struct/aux "union" args))

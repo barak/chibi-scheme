@@ -4,7 +4,7 @@
 \author{Alex Shinn}
 
 \centered{\smaller{Minimal Scheme Implementation for use as an Extension Language}}
-\centered{\url{http://synthcode.com/wiki/chibi-scheme}}
+\centered{\url{https://github.com/ashinn/chibi-scheme}}
 
 \section{Introduction}
 
@@ -28,8 +28,8 @@ standard modules.  You can choose whichever layer suits your needs
 best and customize the rest.  Adding your own primitives or wrappers
 around existing C libraries is easy with the C FFI.
 
-Chibi is known to build and run on 32 and 64-bit Linux, FreeBSD,
-DragonFly, OS X, iOS, Windows (under Cygwin) and Plan9.
+Chibi is known to build and run on 32 and 64-bit Linux, OpenBSD, FreeBSD,
+DragonFlyBSD, OS X, iOS, Windows (under Cygwin) and Plan9.
 
 \section{Installation}
 
@@ -69,6 +69,13 @@ To compile a static executable, use
 
 \command{make chibi-scheme-static SEXP_USE_DL=0}
 
+Note this static executable has none of the external binary libraries
+included, which means among other things you can't load the
+\scheme{(scheme base)} default language.  You need to specify the
+\scheme{(chibi)} or other Scheme-only language to run:
+
+\command{./chibi-scheme-static -q}
+
 To compile a static executable with all C libraries statically
 included, first you need to create a clibs.c file, which can be done
 with:
@@ -79,7 +86,8 @@ or edited manually.  Be sure to run this with a non-static
 chibi-scheme.  Then you can make the static executable with:
 
 \command{
-make -B chibi-scheme-static SEXP_USE_DL=0 CPPFLAGS=-DSEXP_USE_STATIC_LIBS
+make -B chibi-scheme-static SEXP_USE_DL=0 \
+  CPPFLAGS="-DSEXP_USE_STATIC_LIBS -DSEXP_USE_STATIC_LIBS_NO_INCLUDE=0"
 }
 
 By default files are installed in /usr/local.  You can optionally
@@ -128,6 +136,8 @@ documentation system described in
 build this manual.  \ccode{chibi-ffi} is a tool to build wrappers for
 C libraries, described in the FFI section below.
 
+See the examples directory for some sample programs.
+
 \section{Default Language}
 
 \subsection{Scheme Standard}
@@ -155,13 +165,14 @@ currently unspecified.
 In R7RS (and R6RS) semantics it is impossible to use two macros from
 different modules which both use the same auxiliary keywords (like
 \scheme{else} in \scheme{cond} forms) without renaming one of the
-keywords.  By default Chibi considers all top-level bindings
-effectively unbound when matching auxiliary keywords, so this case
-will "just work".  This decision was made because the chance of
-different modules using the same keywords seems more likely than user
-code unintentionally matching a top-level keyword with a different
-binding, however if you want to use R7RS semantics you can compile
-with \ccode{SEXP_USE_STRICT_TOPLEVEL_BINDINGS=1}.
+keywords.  To minimize conflicts Chibi offers a special module named
+\scheme{(auto)} which can export any identifier requested with
+\scheme{only}, e.g. \scheme{(import (only (auto) foo))} will import
+an auxiliary syntax \scheme{foo} binding.  Separate modules can use
+this to get the same binding without needing to know about each other
+in advance.  This is a Chibi-specific extension so is non-portable, but
+you can always define a static \scheme{(auto)} module exporting a list
+of all known bindings for other implementations.
 
 \scheme{load} is extended to accept an optional environment argument, like
 \scheme{eval}.  You can also \scheme{load} shared libraries in addition to
@@ -222,6 +233,15 @@ These forms perform basic selection and renaming of individual
 identifiers from the given module. They may be composed to perform
 combined selection and renaming.
 
+Note while the repl provides default bindings as a convenience,
+programs have strict semantics as in R7RS and must start with at least
+one import, e.g.
+
+\schemeblock{
+(import (scheme base))
+(write-string "Hello world!\n")
+}
+
 Some modules can be statically included in the initial configuration,
 and even more may be included in image files, however in general
 modules are searched for in a module load path.  The definition of the
@@ -230,7 +250,7 @@ module \scheme{(foo bar baz)} is searched for in the file
 installed directories, \scheme{"."} and \scheme{"./lib"}.  Additional
 directories can be specified with the command-line options \ccode{-I}
 and \ccode{-A} (see the command-line options below) or with the
-\scheme{add-modue-directory} procedure at runtime.  You can search for
+\scheme{add-module-directory} procedure at runtime.  You can search for
 a module file with \scheme{(find-module-file <file>)}, or load it with
 \scheme{(load-module-file <file> <env>)}.
 
@@ -415,7 +435,7 @@ temporary values we may generate, which is what the
 \cmacro{sexp_gc_var2}, \cmacro{sexp_gc_preserve2} and
 \cmacro{sexp_gc_release2} macros do (there are similar macros for
 values 1-6).  Precise GCs prevent a class of memory leaks (and
-potential attackes based thereon), but if you prefer convenience then
+potential attacks based thereon), but if you prefer convenience then
 Chibi can be compiled with a conservative GC and you can ignore these.
 
 The interesting part is then the calls to \cfun{sexp_load},
@@ -682,7 +702,9 @@ need to check manually before applying the predicate.
 \item{\ccode{sexp_fixnump(obj)} - \var{obj} is an immediate integer}
 \item{\ccode{sexp_flonump(obj)} - \var{obj} is an inexact real}
 \item{\ccode{sexp_bignump(obj)} - \var{obj} is a heap-allocated integer}
-\item{\ccode{sexp_integerp(obj)} - \var{obj} is an integer}
+\item{\ccode{sexp_integerp(obj)} - \var{obj} is an integer (or flonum truncating without loss)}
+\item{\ccode{sexp_ratiop(obj)} - \var{obj} is an exact rational (with SEXP_USE_RATIOS)}
+\item{\ccode{sexp_complexp(obj)} - \var{obj} is a complex number (with SEXP_USE_COMPLEX)}
 \item{\ccode{sexp_numberp(obj)} - \var{obj} is any kind of number}
 \item{\ccode{sexp_charp(obj)} - \var{obj} is a character}
 \item{\ccode{sexp_stringp(obj)} - \var{obj} is a string}
@@ -778,6 +800,8 @@ once.
 \item{\ccode{sexp_unbox_boolean(obj)} - 1 if \var{obj} is \scheme{#t}, 0 otherwise}
 \item{\ccode{sexp_make_fixnum(n)} - creates a new fixnum representing int \var{n}}
 \item{\ccode{sexp_unbox_fixnum(obj)} - converts a fixnum to a C integer}
+\item{\ccode{sexp_make_flonum(sexp ctx, float f)} - creates a new floating point value}
+\item{\ccode{sexp_flonum_value(obj)} - converts a flonum to a C float}
 \item{\ccode{sexp_make_character(ch)} - creates a new character representing char \var{ch}}
 \item{\ccode{sexp_unbox_character(obj)} - converts a character to a C char}
 \item{\ccode{sexp sexp_make_string_cursor(int offset)} - creates a string cursor for the given byte offset}
@@ -810,6 +834,7 @@ Any of these may fail and return the OOM exception object.
 \item{\ccode{sexp_cons(sexp ctx, sexp obj1, sexp obj2)} - create a new pair whose car is \var{obj1} and whose cdr is \var{obj2}}
 \item{\ccode{sexp_list1(sexp ctx, sexp obj)} - alias for sexp_cons(ctx, obj, SEXP_NULL)}
 \item{\ccode{sexp_list2(sexp ctx, sexp obj1, sexp obj2)} - create a list of two elements}
+\item{\ccode{sexp_list3(sexp ctx, sexp obj1, sexp obj2, sexp obj3)} - create a list of three elements}
 \item{\ccode{sexp_make_string(sexp ctx, sexp len, sexp ch)} - create a new Scheme string of \var{len} characters, all initialized to \var{ch}}
 \item{\ccode{sexp_c_string(sexp ctx, const char* str, int len)} - create a new Scheme string copying the first \var{len} characters of the C string \var{str}.  If \var{len} is -1, uses strlen(\var{str}).}
 \item{\ccode{sexp_intern(sexp ctx, const char* str, int len)} - interns a symbol from the first \var{len} characters of the C string \var{str}.  If \var{len} is -1, uses strlen(\var{str}).}
@@ -848,7 +873,7 @@ Any of these may fail and return the OOM exception object.
 \item{\ccode{sexp_assq(sexp ctx, sexp x, sexp ls)} - \scheme{assq}}
 \item{\ccode{sexp_reverse(sexp ctx, sexp ls)} - \scheme{reverse}}
 \item{\ccode{sexp_nreverse(sexp ctx, sexp ls)} - \scheme{reverse!}}
-\item{\ccode{sexp_append2(sexp ctx, sexp ls)} - \scheme{append} for two arguments}
+\item{\ccode{sexp_append2(sexp ctx, sexp ls1, sexp ls2)} - \scheme{append} for two arguments}
 \item{\ccode{sexp_copy_list(sexp ctx, sexp ls)} - return a shallow copy of \var{ls}}
 \item{\ccode{sexp_list_to_vector(sexp ctx, sexp ls)} - \scheme{list->vector}}
 \item{\ccode{sexp_symbol_to_string(sexp ctx, sexp sym)} - \scheme{symbol->string}}
@@ -983,12 +1008,28 @@ your platform) and the generated .so file can be loaded directly with
 \scheme{load}, or portably using \scheme{(include-shared "file")} in a
 module definition (note that include-shared uses no suffix).
 
+You can do this in one step with the \scheme{-c} flag (described
+below), and it will compile for you automatically:
+
+\command{
+chibi-ffi -c file.stub
+}
+
 The goal of this interface is to make access to C types and functions
 easy, without requiring the user to write any C code.  That means the
 stubber needs to be intelligent about various C calling conventions
 and idioms, such as return values passed in actual parameters.
 Writing C by hand is still possible, and several of the core modules
 provide C interfaces directly without using the stubber.
+
+\subsection{Options}
+
+\itemlist[
+\item{\command{-c/--compile} - automatically compile a shared library}
+\item{\command{--cc <compiler>} - specify the c compiler executable, default cc}
+\item{\command{-f/--flags <flag>} - add a flag to pass to the c compiler, can be used multiple times}
+\item{\command{--features <feature>} - comma-delimited list of features to set before loading the stub file, e.g. debug}
+]
 
 \subsection{Includes and Initializations}
 
@@ -997,6 +1038,7 @@ provide C interfaces directly without using the stubber.
 \item{\scheme{(c-system-include header)} - includes the system file \var{header}}
 \item{\scheme{(c-declare args ...)} - outputs \var{args} directly in the top-level C source}
 \item{\scheme{(c-init args ...)} - evaluates \var{args} as C code after all other library initializations have been performed, with \cvar{ctx} and \cvar{env} in scope}
+\item{\scheme{(c-link lib)} - when automatically compiling with the -c flag, link the given library with -llib}
 ]
 
 \subsection{Struct Interface}
@@ -1029,7 +1071,7 @@ The remaining slots are similar to the
 except they are prefixed with a C type (described below).  The
 \var{c_field_name} should be a field name of \var{struct_name}.
 \var{getter-name} will then be bound to a procedure of one argument, a
-\{struct_name} type, which returns the given field.  If provided,
+\var{struct_name} type, which returns the given field.  If provided,
 \var{setter-name} will be bound to a procedure of two arguments to
 mutate the given field.
 
@@ -1140,6 +1182,19 @@ defines a Scheme variable with the same value as the C constant.
 \item{\rawcode{output-port}}
 ]
 
+\subsubsection{File Descriptor Type}
+
+\itemlist[
+\item{\rawcode{fileno}}
+]
+
+Represents a file descriptor object which is automatically closed on
+GC.  Existing procedures such as \scheme{open} from
+\scheme{(chibi filesystem)} or \scheme{socket} from \scheme{(chibi net)}
+return these, and they can be passed to other filesystem utilities or
+\scheme{open-input-file-descriptor} or \scheme{open-output-file-descriptor}
+from the core \scheme{(chibi)} module.
+
 \subsubsection{Struct Types}
 
 Struct types are by default just referred to by the bare
@@ -1249,6 +1304,7 @@ snow-fort):
 \item{\hyperlink["http://srfi.schemers.org/srfi-46/srfi-46.html"]{(srfi 46) - basic syntax-rules extensions}}
 \item{\hyperlink["http://srfi.schemers.org/srfi-55/srfi-55.html"]{(srfi 55) - require-extension}}
 \item{\hyperlink["http://srfi.schemers.org/srfi-62/srfi-62.html"]{(srfi 62) - s-expression comments}}
+\item{\hyperlink["http://srfi.schemers.org/srfi-64/srfi-64.html"]{(srfi 64) - a scheme API for test suites}}
 \item{\hyperlink["http://srfi.schemers.org/srfi-69/srfi-69.html"]{(srfi 69) - basic hash tables}}
 \item{\hyperlink["http://srfi.schemers.org/srfi-95/srfi-95.html"]{(srfi 95) - sorting and merging}}
 \item{\hyperlink["http://srfi.schemers.org/srfi-98/srfi-98.html"]{(srfi 98) - environment access}}
@@ -1283,7 +1339,14 @@ snow-fort):
 \item{\hyperlink["http://srfi.schemers.org/srfi-160/srfi-160.html"]{(srfi 160) - homogeneous numeric vector libraries}}
 \item{\hyperlink["http://srfi.schemers.org/srfi-165/srfi-165.html"]{(srfi 165) - the environment Monad}}
 \item{\hyperlink["http://srfi.schemers.org/srfi-166/srfi-166.html"]{(srfi 166) - monadic formatting}}
+\item{\hyperlink["http://srfi.schemers.org/srfi-179/srfi-179.html"]{(srfi 179) - nonempty intervals and generalized arrays}}
 \item{\hyperlink["http://srfi.schemers.org/srfi-188/srfi-188.html"]{(srfi 188) - splicing binding constructs for syntactic keywords}}
+\item{\hyperlink["http://srfi.schemers.org/srfi-193/srfi-193.html"]{(srfi 193) - command-line}}
+\item{\hyperlink["http://srfi.schemers.org/srfi-211/srfi-211.html"]{(srfi 211) - scheme macro libaries}}
+\item{\hyperlink["http://srfi.schemers.org/srfi-219/srfi-219.html"]{(srfi 219) - define higher-order lambda}}
+\item{\hyperlink["http://srfi.schemers.org/srfi-227/srfi-227.html"]{(srfi 227) - optional arguments}}
+\item{\hyperlink["http://srfi.schemers.org/srfi-229/srfi-229.html"]{(srfi 229) - tagged procedures}}
+\item{\hyperlink["http://srfi.schemers.org/srfi-231/srfi-231.html"]{(srfi 231) - intervals and generalized arrays}}
 
 ]
 
@@ -1296,7 +1359,11 @@ namespace.
 
 \item{\hyperlink["lib/chibi/ast.html"]{(chibi ast) - Abstract Syntax Tree and other internal data types}}
 
+\item{\hyperlink["lib/chibi/assert.html"]{(chibi assert) - A nicer assert macro}}
+
 \item{\hyperlink["lib/chibi/base64.html"]{(chibi base64) - Base64 encoding and decoding}}
+
+\item{\hyperlink["lib/chibi/binary-record.html"]{(chibi binary-record) - Record types with binary serialization}}
 
 \item{\hyperlink["lib/chibi/bytevector.html"]{(chibi bytevector) - Bytevector Utilities}}
 
@@ -1307,6 +1374,8 @@ namespace.
 \item{\hyperlink["lib/chibi/crypto/rsa.html"]{(chibi crypto rsa) - RSA public key encryption}}
 
 \item{\hyperlink["lib/chibi/crypto/sha2.html"]{(chibi crypto sha2) - SHA-2 hash}}
+
+\item{\hyperlink["lib/chibi/csv.html"]{(chibi csv) - CSV parsing and formatting}}
 
 \item{\hyperlink["lib/chibi/diff.html"]{(chibi diff) - LCS Algorithm and diff utilities}}
 
@@ -1364,6 +1433,10 @@ namespace.
 
 \item{\hyperlink["lib/chibi/repl.html"]{(chibi repl) - A full-featured Read/Eval/Print Loop}}
 
+\item{\hyperlink["lib/chibi/shell.html"]{(chibi shell) - Process combinators with high-level pipeline syntax in the spirit of SCSH.}}
+
+\item{\hyperlink["lib/chibi/show.html"]{(chibi show) - Monadic formatting.}}
+
 \item{\hyperlink["lib/chibi/scribble.html"]{(chibi scribble) - A parser for the scribble syntax used to write this manual}}
 
 \item{\hyperlink["lib/chibi/string.html"]{(chibi string) - Cursor-based string library (predecessor to SRFI 130)}}
@@ -1402,6 +1475,20 @@ Note by default \scheme{snow-chibi} uses an image file to speed-up
 loading (since it loads many libraries) - if you have any difficulties
 with image files on your platform you can run
 \command{snow-chibi --noimage} to disable this feature.
+
+\subsection{Snow Configuration}
+
+Snow is configured in the file $HOME/.snow/config.scm. A common example,
+for use with packaging your own code, may look like the one below:
+(Note that the empty list is \emph{not} quoted! This file is not evaluated,
+but is simply read as an alist of configurations. See
+https://snow-fort.org/doc/author/ for more details.)
+\schemeblock{
+((authors "Alysssa P. Hacker <aphacker@mit.edu>")
+ (maintainers "Alyssa P. Hacker <aphacker@mit.edu>, Eva Luator <eluator@mit.edu")
+ (license agpl)) ;; or gpl mit bsd etc.
+}
+
 
 \subsubsection{Querying Packages and Status}
 
@@ -1558,6 +1645,11 @@ can specify any option, for example:
    (license gpl))))
 }
 
+\itemlist[
+\item{\scheme{--foreign-depends} - specify foreign libraries the library
+depends on (comma-delimited) (for example ffi,sqlite3 for -lffi -lsqlite3)}
+]
+
 Top-level snow options are represented as a flat alist.  Options
 specific to a command are nested under \scheme{(command (name ...))},
 with most options here being for \scheme{package}.  Here unless
@@ -1575,17 +1667,29 @@ conventions, you can thus simply run \scheme{snow-chibi package
 \subsubsection{Other Implementations}
 
 Although the command is called \scheme{snow-chibi}, it supports
-several other R7RS implementations.  The \scheme{implementations}
-command tells you which you currently have installed.  The following
-are currently supported:
+several other R7RS implementations and generic installation of libraries.
+The \scheme{implementations} command tells you which you currently have
+installed. The following are currently supported:
 
 \itemlist[
-\item{chibi - native support as of version 0.7.3}
+\item{capyscheme - version >= 0.1.0}
+\item{chibi - version >= 0.7.3}
 \item{chicken - version >= 4.9.0 with the \scheme{r7rs} egg}
 \item{cyclone - version >= 0.5.3}
-\item{foment - version >= 0.4}
+\item{foment - version >= 0.4; Libraries are installed into /usr/local/lib/snow, user needs to add it into loadpath}
+\item{gambit - version >= 4.9.3}
+\item{generic; By default libraries are installed into /usr/local/lib/snow or %LOCALAPPDATA%/lib/snow on windows}
 \item{gauche - version >= 0.9.4}
-\item{kawa - version >= 2.0; you need to add the install dir to the search path, e.g. \scheme{-Dkawa.import.path=/usr/local/share/kawa}}
+\item{guile - version >= 3.0.7}
+\item{kawa - version >= 2.0; you need to add the install dir to the search path, e.g. \scheme{-Dkawa.import.path=/usr/local/share/kawa/lib/*.sld}}
+\item{loko - version >= 0.12.2}
+\item{mit-scheme - version >= 12.1}
 \item{larceny - version 0.98; you need to add "lib/Snow" to the paths in startup.sch}
-\item{sagittarius - version >= 0.98}
+\item{mosh - version >= 0.29-rc1}
+\item{racket - version >= 8.16 with the \scheme{r7rs} pkg}
+\item{sagittarius - version >= 0.9.13}
+\item{skint - version > 0.6.7}
+\item{stklos - version > 2.10}
+\item{tr7 - version > 2.0.12}
+\item{ypsilon - version > 2.0.8}
 ]

@@ -38,6 +38,7 @@ lib/.*.meta
 
 # Generated files
 chibi-scheme
+chibi-scheme-static
 chibi-scheme-emscripten
 chibi-scheme.pc
 include/chibi/install.h
@@ -47,6 +48,7 @@ lib/chibi/io/io.c
 lib/chibi/net.c
 lib/chibi/process.c
 lib/chibi/pty.c
+lib/chibi/snow/install.sld
 lib/chibi/stty.c
 lib/chibi/system.c
 lib/chibi/time.c
@@ -62,6 +64,7 @@ lib/srfi/160/uvprims.c
 *.err
 *.fasl
 *.txt
+!CMakeLists.txt
 *.test
 *.train
 *.h5
@@ -82,3 +85,6 @@ js/chibi.*
 
 build-lib/chibi/char-set/derived.scm
 build-lib/chibi/char-set/width.scm
+
+# vim swapfiles
+*.swp

@@ -33,6 +33,7 @@
 
 (define (run-http-server listener-or-addr servlet . o)
   (let ((cfg (if (pair? o) (car o) (make-conf '() #f #f #f))))
+    (set-signal-action! signal/pipe #f)
     (run-net-server
      listener-or-addr
      (command-handler
@@ -53,8 +54,9 @@
                    (make-request command (car ls) (cadr ls) in out sock addr))))
             (cond
              (request
-              (log-info `(request: ,command ,(car ls) ,(cadr ls)
-                                   ,(request-headers request)))
+              (if (not (conf-get cfg 'quiet?))
+                  (log-info `(request: ,command ,(car ls) ,(cadr ls)
+                                       ,(request-headers request))))
               (protect (exn
                         (else
                          (log-error "internal error: " exn)
@@ -63,7 +65,7 @@
                 (let restart ((request request))
                   (servlet cfg request servlet-bad-request restart)))))))
          (else
-          (let ((request (make-request command #f #f in out sock addr)))
+          (let ((request (make-request command "" #f in out sock addr)))
             (servlet-respond request 400 "bad request")))))))))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
@@ -145,7 +147,7 @@
            (cond
             ((mime-type-from-extension (path-extension path))
              => (lambda (type) `((Content-Type . ,type))))
-            (else '()))))
+            (else '((Content-Type . "application/octet-stream"))))))
       (servlet-respond request 200 "OK" headers)
       (send-file path (request-out request))))
    (else
@@ -523,7 +525,7 @@
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;; Sample main.  In chibi-scheme you can run:
 ;;
-;; chibi-scheme -Rchibi.net.http-config-server -- [<cfg-file-or-directory>]
+;; chibi-scheme -Rchibi.net.http-server -- [<cfg-file-or-directory>]
 ;;
 ;; which defaults to serving the current directory on port 8000.
 
@@ -547,9 +549,10 @@
   `(http-config-server
     "Config-based HTTP server"
     (@
-     ((port integer)
-      (doc-root string)
-      (verbose? boolean (#\v "verbose"))))
+     (port integer)
+     (doc-root string)
+     (verbose? boolean (#\v "verbose"))
+     (quiet? boolean (#\q "quiet")))
     ,run-app))
 
 (define (main args) (run-application app-spec))

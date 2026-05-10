@@ -2,7 +2,11 @@
   (call-with-output-string (lambda (out) (write x out))))
 
 (define known-implementations
-  `((chibi "chibi-scheme" (chibi-scheme -V) "0.7.3"
+  `((capyscheme "capy" #f #f
+                ,(delay
+                   (process->sexp
+                     '(capy --command="(features)"))))
+    (chibi "chibi-scheme" (chibi-scheme -V) "0.7.3"
            ,(delay
               (process->sexp
                '(chibi-scheme -p "(features)"))))
@@ -25,20 +29,88 @@
             ,(delay
                (process->sexp
                 '(foment -e "(write (features))"))))
+    (gambit "gsc" (gsc -v) #f
+            ,(delay
+               (process->sexp
+                '(gsc -e "(display (features))"))))
+    (generic "generic" #f #f
+            ,(delay (write-string "generic\n")))
     (gauche "gosh" (gosh -E "print (gauche-version)") "0.9.4"
             ,(delay
                (process->sexp
                 '(gosh -uscheme.base -e "(write (features))"))))
+    (guile "guile" (guile -e "(display (version))") "3.0.8"
+           ,(delay
+              (process->sexp
+               '(guile --r7rs -c "(import (scheme base)) (display (features))"))))
     (kawa "kawa" (kawa --version) "2.0"
           ,(delay
              (process->sexp
               '(kawa -e "(write (features))"))))
+    (loko "loko" #f #f
+          ,(delay
+           (call-with-temp-file "snow-loko.scm"
+            (lambda (tmp-path out preserve)
+             (with-output-to-file tmp-path
+              (lambda ()
+               (display "(import (scheme base) (scheme write))")
+               (newline)
+               (display "(display (features))")))
+             (process->sexp
+              `(loko -std=r7rs --program ,tmp-path))))))
+     (mit-scheme "mit-scheme" (mit-scheme --version) #f
+          ,(delay
+             (process->sexp
+              '(mit-scheme --batch-mode --eval "(display (features))" --eval "(exit 0)"))))
+    (mosh "mosh" (mosh -v) #f
+          ,(delay
+           (call-with-temp-file "snow-mosh.scm"
+            (lambda (tmp-path out preserve)
+             (with-output-to-file tmp-path
+              (lambda ()
+               (display "(import (scheme base) (scheme write) (mosh config))")
+               (newline)
+               (display "(display (features))")))
+             (process->sexp
+              `(mosh ,tmp-path))))))
     (larceny "larceny" (larceny --version) "v0.98"
              ,(delay '()))
-    (sagittarius "sagittarius" #f #f
+    (racket "racket" (racket --version) #f
+          ,(delay
+             (process->sexp
+              '(racket -I r7rs -e "(import (scheme base) (scheme write)) (display (features))"))))
+    (sagittarius "sagittarius" (sagittarius --version) #f
                  ,(delay
                     (process->sexp
-                     '(sagittarius -I "(scheme base)" -e "(write (features))"))))))
+                     '(sagittarius -I "(scheme base)" -e "(write (features)) (exit)"))))
+    (skint "skint" (skint --version) #f
+                 ,(delay
+                    (process->sexp
+                     '(skint -qe "(features)"))))
+    (stklos "stklos" (stklos --version) #f
+                 ,(delay
+                    (process->sexp
+                     '(stklos -e "(write (features))"))))
+    (tr7 "tr7i" (tr7i -c "(import (scheme base) (scheme write) (tr7 misc)) (display (tr7-version))") #f
+                 ,(delay
+                    (process->sexp
+                     '(tr7i -c "(import (scheme base)) (write (features))"))))
+    (ypsilon "ypsilon" (ypsilon --version) #f
+             ,(delay
+                (call-with-temp-file "snow-ypsilon"
+                 (lambda (tmp-path out preserve)
+                  (with-output-to-file tmp-path
+                                       (lambda ()
+                                        (display "(import (scheme base) (scheme write))")
+                                        (newline)
+                                        (display "(display (features))")))
+                   (process->sexp
+                    `(ypsilon --r7rs ,tmp-path))))))))
+
+(define (assq-ref ls key . o)
+  (cond ((assq key ls) => cdr)
+        ((pair? o) (car o))
+        (else #f)))
 
 (define (impl->version impl cmd)
   (let* ((lines (process->string-list cmd))
@@ -54,9 +126,16 @@
 
 (define (target-is-host? impl)
   (case impl
+    ((capyscheme) (cond-expand (capyscheme #t) (else #f)))
     ((chibi) (cond-expand (chibi #t) (else #f)))
+    ((gambit) (cond-expand (gambit #t) (else #f)))
     ((gauche) (cond-expand (gauche #t) (else #f)))
+    ((mit) (cond-expand (mit #t) (else #f)))
+    ((racket) (cond-expand (racket #t) (else #f)))
     ((sagittarius) (cond-expand (sagittarius #t) (else #f)))
+    ((skint) (cond-expand (skint #t) (else #f)))
+    ((stklos) (cond-expand (stklos #t) (else #f)))
+    ((tr7) (cond-expand (tr7 #t) (else #f)))
     (else #f)))
 
 (define (impl->features impl)
@@ -98,6 +177,16 @@
             (process->bytevector `(curl --silent ,(uri->string uri)))
             (call-with-input-url uri port->bytevector))
         (file->bytevector (uri-path uri)))))
+
+(define (git-resource->bytevector cfg uri file-path)
+  (call-with-temp-dir
+    "snow-fort-repo-git-clone"
+    (lambda (dir preserve)
+      (let* ((git-commands `((git clone ,uri ,dir --depth=1)))
+             (git-outputs (map process->output+error+status git-commands)))
+        (when (not (= (list-ref (list-ref git-outputs 0) 2) 0))
+          (error "Git clone failed" (list-ref git-outputs 0)))
+        (file->bytevector (make-path dir file-path))))))
 
 ;; path-normalize either a uri or path, and return the result as a string
 (define (uri-normalize x)
@@ -171,3 +260,17 @@
                      (lp2 (cdr ls2)
                           (cons (car ls2) seen)
                           (cons (car ls2) res))))))))))))
+
+(define (tai->rfc-3339 seconds)
+  (define (pad2 n)
+    (if (< n 10)
+        (string-append "0" (number->string n))
+        (number->string n)))
+  (let ((tm (seconds->time (exact (round seconds)))))
+    (string-append
+     (number->string (+ 1900 (time-year tm))) "-"
+     (pad2 (+ 1 (time-month tm))) "-"
+     (pad2 (time-day tm)) "T"
+     (pad2 (time-hour tm)) ":"
+     (pad2 (time-minute tm)) ":"
+     (pad2 (time-second tm)) "+00:00")))

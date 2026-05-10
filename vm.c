@@ -41,38 +41,78 @@ static sexp sexp_lookup_source_info (sexp src, int ip) {
 }
 #endif
 
-void sexp_stack_trace (sexp ctx, sexp out) {
-  int i, fp=sexp_context_last_fp(ctx);
-  sexp self, bc, src, *stack=sexp_stack_data(sexp_context_stack(ctx));
-  if (! sexp_oportp(out))
-    out = sexp_current_error_port(ctx);
+sexp sexp_get_stack_trace (sexp ctx) {
+  sexp_sint_t i, fp=sexp_context_last_fp(ctx);
+  sexp self, bc, src, *stack = sexp_stack_data(sexp_context_stack(ctx));
+  sexp_gc_var2(res, cell);
+  sexp_gc_preserve2(ctx, res, cell);
+  res = SEXP_NULL;
   for (i=fp; i>4; i=sexp_unbox_fixnum(stack[i+3])) {
     self = stack[i+2];
     if (self && sexp_procedurep(self)) {
-      sexp_write_string(ctx, "  called from ", out);
       bc = sexp_procedure_code(self);
-      if (sexp_symbolp(sexp_bytecode_name(bc)))
-        sexp_write(ctx, sexp_bytecode_name(bc), out);
-      else
-        sexp_write_string(ctx, "<anonymous>", out);
       src = sexp_bytecode_source(bc);
 #if SEXP_USE_FULL_SOURCE_INFO
       if (src && sexp_vectorp(src))
         src = sexp_lookup_source_info(src, sexp_unbox_fixnum(stack[i+3]));
 #endif
-      if (src && sexp_pairp(src)) {
-        if (sexp_fixnump(sexp_cdr(src)) && (sexp_cdr(src) >= SEXP_ZERO)) {
-          sexp_write_string(ctx, " on line ", out);
-          sexp_write(ctx, sexp_cdr(src), out);
-        }
-        if (sexp_stringp(sexp_car(src))) {
-          sexp_write_string(ctx, " of file ", out);
-          sexp_write_string(ctx, sexp_string_data(sexp_car(src)), out);
-        }
-      }
-      sexp_write_char(ctx, '\n', out);
+      cell = sexp_cons(ctx, self, src ? src : SEXP_FALSE);
+      res = sexp_cons(ctx, cell, res);
     }
   }
+  res = sexp_nreverse(ctx, res);
+  sexp_gc_release2(ctx);
+  return res;
+}
+
+void sexp_print_extracted_stack_trace (sexp ctx, sexp trace, sexp out) {
+  sexp self, bc, src, ls;
+  if (! sexp_oportp(out))
+    out = sexp_current_error_port(ctx);
+  for (ls = trace; sexp_pairp(ls); ls = sexp_cdr(ls)) {
+    self = sexp_caar(ls);
+    bc = sexp_procedure_code(self);
+    src = sexp_cdar(ls);
+    sexp_write_string(ctx, "  called from ", out);
+    if (sexp_symbolp(sexp_bytecode_name(bc)))
+      sexp_write(ctx, sexp_bytecode_name(bc), out);
+    else
+      sexp_write_string(ctx, "<anonymous>", out);
+    if (sexp_pairp(src)) {
+      if (sexp_fixnump(sexp_cdr(src)) && (sexp_cdr(src) >= SEXP_ZERO)) {
+        sexp_write_string(ctx, " on line ", out);
+        sexp_write(ctx, sexp_cdr(src), out);
+      } else {
+        sexp_write_string(ctx, " bad source line: ", out);
+        sexp_write(ctx, src, out);
+      }
+      if (sexp_stringp(sexp_car(src))) {
+        sexp_write_string(ctx, " of file ", out);
+        sexp_write_string(ctx, sexp_string_data(sexp_car(src)), out);
+      } else {
+        sexp_write_string(ctx, " bad source file: ", out);
+        sexp_write(ctx, src, out);
+      }
+    }
+    sexp_write_char(ctx, '\n', out);
+  }
+}
+
+sexp sexp_print_exception_stack_trace_op (sexp ctx, sexp self, sexp_sint_t n, sexp exn, sexp out) {
+  sexp_assert_type(ctx, sexp_exceptionp, SEXP_EXCEPTION, exn);
+  sexp_assert_type(ctx, sexp_oportp, SEXP_OPORT, out);
+  if (sexp_pairp(sexp_exception_stack_trace(exn))) {
+    sexp_print_extracted_stack_trace(ctx, sexp_exception_stack_trace(exn), out);
+  }
+  return SEXP_VOID;
+}
+
+void sexp_stack_trace (sexp ctx, sexp out) {
+  sexp_gc_var1(trace);
+  sexp_gc_preserve1(ctx, trace);
+  trace = sexp_get_stack_trace(ctx);
+  sexp_print_extracted_stack_trace(ctx, trace, out);
+  sexp_gc_release1(ctx);
 }
 
 sexp sexp_stack_trace_op (sexp ctx, sexp self, sexp_sint_t n, sexp out) {
@@ -637,6 +677,13 @@ static void generate_lambda (sexp ctx, sexp name, sexp loc, sexp lam, sexp lambd
   }
   sexp_context_lambda(ctx2) = lambda;
   sexp_gc_preserve2(ctx, tmp, bc);
+#if SEXP_USE_FULL_SOURCE_INFO
+  tmp = sexp_cons(ctx, SEXP_NEG_ONE, sexp_lambda_source(lambda));
+  tmp = sexp_cons(ctx, tmp, SEXP_NULL);
+#else
+  tmp = sexp_lambda_source(lambda);
+#endif
+  sexp_bytecode_source(sexp_context_bc(ctx2)) = tmp;
   tmp = sexp_cons(ctx2, SEXP_ZERO, sexp_lambda_source(lambda));
   /* allocate space for local vars */
   k = sexp_unbox_fixnum(sexp_length(ctx, sexp_lambda_locals(lambda)));
@@ -678,9 +725,6 @@ static void generate_lambda (sexp ctx, sexp name, sexp loc, sexp lam, sexp lambd
     sexp_context_exception(ctx) = bc;
   } else {
   sexp_bytecode_name(bc) = sexp_lambda_name(lambda);
-#if ! SEXP_USE_FULL_SOURCE_INFO
-  sexp_bytecode_source(bc) = sexp_lambda_source(lambda);
-#endif
   if (sexp_nullp(fv)) {
     /* shortcut, no free vars */
     tmp = sexp_make_vector(ctx2, SEXP_ZERO, SEXP_VOID);
@@ -743,18 +787,19 @@ static sexp make_param_list (sexp ctx, sexp_uint_t i) {
   return res;
 }
 
-static sexp make_opcode_procedure (sexp ctx, sexp op, sexp_uint_t i) {
+static sexp make_opcode_procedure (sexp ctx, sexp op, sexp_uint_t i, sexp_sint_t flags) {
+  int j = i+(flags & SEXP_PROC_VARIADIC);
   sexp ls, res, env;
   sexp_gc_var6(bc, params, ref, refs, lambda, ctx2);
-  if (i == sexp_opcode_num_args(op)) { /* return before preserving */
+  if (j == sexp_opcode_num_args(op)) { /* return before preserving */
     if (sexp_opcode_proc(op)) return sexp_opcode_proc(op);
-  } else if (i < sexp_opcode_num_args(op)) {
+  } else if (j < sexp_opcode_num_args(op)) {
     return sexp_compile_error(ctx, "not enough args for opcode", op);
   } else if (! sexp_opcode_variadic_p(op)) { /* i > num_args */
     return sexp_compile_error(ctx, "too many args for opcode", op);
   }
   sexp_gc_preserve6(ctx, bc, params, ref, refs, lambda, ctx2);
-  params = make_param_list(ctx, i);
+  params = make_param_list(ctx, j);
   lambda = sexp_make_lambda(ctx, params);
   ctx2 = sexp_make_child_context(ctx, lambda);
   env = sexp_extend_env(ctx2, sexp_context_env(ctx), params, lambda);
@@ -775,12 +820,34 @@ static sexp make_opcode_procedure (sexp ctx, sexp op, sexp_uint_t i) {
       generate_opcode_app(ctx2, refs);
       bc = sexp_complete_bytecode(ctx2);
       sexp_bytecode_name(bc) = sexp_opcode_name(op);
-      res=sexp_make_procedure(ctx2, SEXP_ZERO, sexp_make_fixnum(i), bc, SEXP_VOID);
-      if (i == sexp_opcode_num_args(op))
+      res=sexp_make_procedure(ctx2, sexp_make_fixnum(flags), sexp_make_fixnum(i), bc, SEXP_VOID);
+      if (j == sexp_opcode_num_args(op))
         sexp_opcode_proc(op) = res;
     }
   }
   sexp_gc_release6(ctx);
+  return res;
+}
+
+sexp sexp_make_foreign_proc(sexp ctx, const char *name, int num_args, int flags,
+                            const char *fname, sexp_proc1 f) {
+  sexp_gc_var1(res);
+  sexp_gc_preserve1(ctx, res);
+  res = sexp_make_foreign (ctx, name, num_args+((flags & SEXP_PROC_VARIADIC)>0), 0, fname, f, NULL);
+  if (!sexp_exceptionp(res))
+    res = make_opcode_procedure (ctx, res, num_args, flags);
+  sexp_gc_release1(ctx);
+  return res;
+}
+
+sexp sexp_define_foreign_proc_aux (sexp ctx, sexp env, const char *name,int num_args,
+                                   int flags, const char *fname, sexp_proc1 f, sexp data) {
+  sexp_gc_var2(sym, res);
+  sexp_gc_preserve2(ctx, sym, res);
+  res = sexp_make_foreign_proc(ctx, name, num_args, flags, fname, f);
+  if (!sexp_exceptionp(res))
+    sexp_env_define(ctx, env, sym = sexp_intern(ctx, name, -1), res);
+  sexp_gc_release2(ctx);
   return res;
 }
 
@@ -845,12 +912,12 @@ static sexp sexp_restore_stack (sexp ctx, sexp saved) {
   return SEXP_VOID;
 }
 
-#define _ARG1 stack[top-1]
-#define _ARG2 stack[top-2]
-#define _ARG3 stack[top-3]
-#define _ARG4 stack[top-4]
-#define _ARG5 stack[top-5]
-#define _ARG6 stack[top-6]
+#define _ARG1 (stack[top-1])
+#define _ARG2 (stack[top-2])
+#define _ARG3 (stack[top-3])
+#define _ARG4 (stack[top-4])
+#define _ARG5 (stack[top-5])
+#define _ARG6 (stack[top-6])
 #define _PUSH(x) (stack[top++]=(x))
 #define _POP() (stack[--top])
 
@@ -988,6 +1055,7 @@ static void* sexp_thread_debug_event(sexp ctx) {
 #if SEXP_USE_POLL_PORT
 int sexp_poll_port(sexp ctx, sexp port, int inputp) {
   fd_set fds;
+  struct timeval timeout;
   int fd = sexp_port_fileno(port);
   if (fd < 0) {
     usleep(SEXP_POLL_SLEEP_TIME);
@@ -995,7 +1063,9 @@ int sexp_poll_port(sexp ctx, sexp port, int inputp) {
   }
   FD_ZERO(&fds);
   FD_SET(fd, &fds);
-  return select(1, (inputp ? &fds : NULL), (inputp ? NULL : &fds), NULL, NULL);
+  timeout.tv_sec = 0;
+  timeout.tv_usec = 10000;  /* 10millis */
+  return select(1, (inputp ? &fds : NULL), (inputp ? NULL : &fds), NULL, &timeout);
 }
 #endif
 
@@ -1025,7 +1095,9 @@ sexp sexp_apply (sexp ctx, sexp proc, sexp args) {
   sexp_ensure_stack(i + 64 + (sexp_procedurep(tmp1) ? sexp_bytecode_max_depth(sexp_procedure_code(tmp1)) : 0));
   for (top += i; sexp_pairp(tmp2); tmp2=sexp_cdr(tmp2), top--)
     _ARG1 = sexp_car(tmp2);
-  top += i+1;
+  top += i;
+  /* restore the make_call invariant */
+  _PUSH(tmp1);
   goto make_call;
 
  loop:
@@ -1130,6 +1202,8 @@ sexp sexp_apply (sexp ctx, sexp proc, sexp args) {
       if (!sexp_exceptionp(_ARG1)) {
         _ARG1 = sexp_make_exception(ctx, SEXP_UNCAUGHT, SEXP_FALSE, _ARG1, self, SEXP_FALSE);
       }
+      sexp_context_top(ctx) = top;
+      sexp_exception_stack_trace(_ARG1) = sexp_get_stack_trace(ctx);
       goto end_loop;
     }
     stack[top] = SEXP_ONE;
@@ -1194,7 +1268,9 @@ sexp sexp_apply (sexp ctx, sexp proc, sexp args) {
       int prev_top = top;
       for (top=fp-j+i-1; sexp_pairp(tmp2); tmp2=sexp_cdr(tmp2), top--)
         stack[top] = sexp_car(tmp2);
-      top = fp+i-j+1;
+      top = fp+i-j;
+      /* restore the make_call invariant */
+      _PUSH(tmp1);
       fp = k;
       /* if final cdr of tmp2 isn't null, then args list was improper */
       if (! sexp_nullp(tmp2)) {
@@ -1217,7 +1293,9 @@ sexp sexp_apply (sexp ctx, sexp proc, sexp args) {
     /* copy new args into place */
     for (k=0; k<i; k++)
       stack[fp-j+k] = stack[top-1-i+k];
-    top = fp+i-j+1;
+    top = fp+i-j;
+    /* restore the make_call invariant */
+    _PUSH(tmp1);
     fp = sexp_unbox_fixnum(tmp2);
     goto make_call;
   case SEXP_OP_CALL:
@@ -1228,7 +1306,7 @@ sexp sexp_apply (sexp ctx, sexp proc, sexp args) {
     sexp_context_top(ctx) = top;
     if (sexp_opcodep(tmp1)) {
       /* compile non-inlined opcode applications on the fly */
-      tmp1 = make_opcode_procedure(ctx, tmp1, i);
+      tmp1 = make_opcode_procedure(ctx, tmp1, i, SEXP_PROC_NONE);
       if (sexp_exceptionp(tmp1)) {
         _ARG1 = tmp1;
         goto call_error_handler;
@@ -1791,7 +1869,12 @@ sexp sexp_apply (sexp ctx, sexp proc, sexp args) {
       if (sexp_flonum_value(_ARG1) == trunc(sexp_flonum_value(_ARG1)))
         _ARG1 = sexp_make_fixnum(sexp_flonum_value(_ARG1));
 #else
-      _ARG1 = sexp_fx_div(tmp1, tmp2);
+      if (tmp1 == sexp_make_fixnum(SEXP_MIN_FIXNUM) && tmp2 == SEXP_NEG_ONE) {
+        _ARG1 = sexp_fixnum_to_bignum(ctx, tmp1);
+        sexp_negate_exact(_ARG1);
+      } else {
+        _ARG1 = sexp_fx_div(tmp1, tmp2);
+      }
 #endif
 #endif
     }
@@ -1818,7 +1901,12 @@ sexp sexp_apply (sexp ctx, sexp proc, sexp args) {
     if (sexp_fixnump(tmp1) && sexp_fixnump(tmp2)) {
       if (tmp2 == SEXP_ZERO)
         sexp_raise("divide by zero", SEXP_NULL);
-      _ARG1 = sexp_fx_div(tmp1, tmp2);
+      if (tmp1 == sexp_make_fixnum(SEXP_MIN_FIXNUM) && tmp2 == SEXP_NEG_ONE) {
+        _ARG1 = sexp_fixnum_to_bignum(ctx, tmp1);
+        sexp_negate_exact(_ARG1);
+      } else {
+        _ARG1 = sexp_fx_div(tmp1, tmp2);
+      }
     }
 #if SEXP_USE_BIGNUMS
     else {
@@ -2019,7 +2107,7 @@ sexp sexp_apply (sexp ctx, sexp proc, sexp args) {
     else
 #endif
     i = sexp_write_char(ctx, sexp_unbox_character(_ARG1), _ARG2);
-    if (i == EOF) {
+    if ((int)i == EOF) {
       if (!sexp_port_openp(_ARG2))
         sexp_raise("write-char: port is closed", _ARG2);
       else
@@ -2098,18 +2186,12 @@ sexp sexp_apply (sexp ctx, sexp proc, sexp args) {
     errno = 0;
 #endif
     i = sexp_read_char(ctx, _ARG1);
-#if SEXP_USE_UTF8_STRINGS
-    if (i >= 0x80)
-      _ARG1 = sexp_read_utf8_char(ctx, _ARG1, i);
-    else
-#endif
-    if (i == EOF) {
-      if (!sexp_port_openp(_ARG1))
+    if ((int)i == EOF) {
+      if (!sexp_port_openp(_ARG1)) {
         sexp_raise("read-char: port is closed", _ARG1);
-      else
 #if SEXP_USE_GREEN_THREADS
-      if ((sexp_port_stream(_ARG1) ? ferror(sexp_port_stream(_ARG1)) : 1)
-          && (errno == EAGAIN)) {
+      } else if ((sexp_port_stream(_ARG1) ? ferror(sexp_port_stream(_ARG1)) : 1)
+                 && (errno == EAGAIN)) {
         if (sexp_port_stream(_ARG1)) clearerr(sexp_port_stream(_ARG1));
         /* TODO: block and unblock */
         if (sexp_applicablep(sexp_global(ctx, SEXP_G_THREADS_BLOCKER)))
@@ -2118,9 +2200,14 @@ sexp sexp_apply (sexp ctx, sexp proc, sexp args) {
           sexp_poll_input(ctx, _ARG1);
         fuel = 0;
         ip--;      /* try again */
-      } else
 #endif
+      } else {
         _ARG1 = SEXP_EOF;
+      }
+#if SEXP_USE_UTF8_STRINGS
+    } else if (i >= 0x80) {
+      _ARG1 = sexp_read_utf8_char(ctx, _ARG1, i);
+#endif
     } else {
       if (i == '\n') sexp_port_line(_ARG1)++;
       _ARG1 = sexp_make_character(i);
@@ -2135,7 +2222,7 @@ sexp sexp_apply (sexp ctx, sexp proc, sexp args) {
     errno = 0;
 #endif
     i = sexp_read_char(ctx, _ARG1);
-    if (i == EOF) {
+    if ((int)i == EOF) {
       if (!sexp_port_openp(_ARG1))
         sexp_raise("peek-char: port is closed", _ARG1);
       else

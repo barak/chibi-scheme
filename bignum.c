@@ -999,8 +999,8 @@ sexp sexp_complex_sub (sexp ctx, sexp a, sexp b) {
   sexp_gc_var2(res, tmp);
   sexp_gc_preserve2(ctx, res, tmp);
   tmp = sexp_complex_copy(ctx, b);
-  sexp_negate(sexp_complex_real(tmp));
-  sexp_negate(sexp_complex_imag(tmp));
+  sexp_negate_maybe_ratio(sexp_complex_real(tmp));
+  sexp_negate_maybe_ratio(sexp_complex_imag(tmp));
   res = sexp_complex_add(ctx, a, tmp);
   sexp_gc_release2(ctx);
   return res;
@@ -1110,7 +1110,7 @@ sexp sexp_complex_sqrt (sexp ctx, sexp z) {
   r = sqrt(x*x + y*y);
   res = sexp_make_complex(ctx, SEXP_ZERO, SEXP_ZERO);
   sexp_complex_real(res) = sexp_make_flonum(ctx, sqrt((x+r)/2));
-  sexp_complex_imag(res) = sexp_make_flonum(ctx, ((y<0||(y==0&&1/y<0))?-1:1)*sqrt((-x+r)/2));
+  sexp_complex_imag(res) = sexp_make_flonum(ctx, ((y<-0.0)?-1:1)*sqrt((-x+r)/2));
   sexp_gc_release1(ctx);
   return res;
 }
@@ -1453,11 +1453,7 @@ sexp sexp_sub (sexp ctx, sexp a, sexp b) {
     sexp_negate_exact(sexp_ratio_numerator(tmp2));
     r = sexp_ratio_add(ctx, a, tmp2);
     if (negatep) {
-      if (sexp_ratiop(r)) {
-        sexp_negate_exact(sexp_ratio_numerator(r));
-      } else {
-        sexp_negate_exact(r);
-      }
+      sexp_negate_maybe_ratio(r);
     }
     break;
 #endif
@@ -1489,10 +1485,10 @@ sexp sexp_sub (sexp ctx, sexp a, sexp b) {
     if (negatep) {
       if (sexp_complexp(r)) {
         r = sexp_complex_copy(ctx, r);
-        sexp_negate(sexp_complex_real(r));
-        sexp_negate(sexp_complex_imag(r));
+        sexp_negate_maybe_ratio(sexp_complex_real(r));
+        sexp_negate_maybe_ratio(sexp_complex_imag(r));
       } else {
-        sexp_negate(r);
+        sexp_negate_maybe_ratio(r);
       }
     }
     break;
@@ -1766,6 +1762,9 @@ sexp sexp_quotient (sexp ctx, sexp a, sexp b) {
     break;
   case SEXP_NUM_FIX_FIX:
     r = sexp_fx_div(a, b);
+    if ((sexp_sint_t)a < 0 && (sexp_sint_t)b < 0 && (sexp_sint_t)r < 0) {
+      r = sexp_quotient(ctx, tmp=sexp_fixnum_to_bignum(ctx, a), b);
+    }
     break;
   case SEXP_NUM_FIX_BIG:
     r = SEXP_ZERO;
@@ -1868,16 +1867,16 @@ sexp sexp_compare (sexp ctx, sexp a, sexp b) {
   sexp_gc_preserve1(ctx, tmp);
   if (at > bt) {
     r = sexp_compare(ctx, b, a);
-    sexp_negate(r);
+    if (!sexp_exceptionp(r)) { sexp_negate(r); }
   } else {
     switch ((at * SEXP_NUM_NUMBER_TYPES) + bt) {
     case SEXP_NUM_NOT_NOT: case SEXP_NUM_NOT_FIX:
     case SEXP_NUM_NOT_FLO: case SEXP_NUM_NOT_BIG:
 #if SEXP_USE_COMPLEX
-    case SEXP_NUM_CPX_CPX: case SEXP_NUM_CPX_FIX:
-    case SEXP_NUM_CPX_FLO: case SEXP_NUM_CPX_BIG:
+    case SEXP_NUM_CPX_CPX: case SEXP_NUM_FIX_CPX:
+    case SEXP_NUM_FLO_CPX: case SEXP_NUM_BIG_CPX:
 #if SEXP_USE_RATIOS
-    case SEXP_NUM_CPX_RAT:
+    case SEXP_NUM_RAT_CPX:
 #endif
 #endif
       r = sexp_type_exception(ctx, NULL, SEXP_NUMBER, a);
@@ -1886,12 +1885,13 @@ sexp sexp_compare (sexp ctx, sexp a, sexp b) {
       r = sexp_make_fixnum(sexp_unbox_fixnum(a) - sexp_unbox_fixnum(b));
       break;
     case SEXP_NUM_FIX_FLO:
-      f = sexp_fixnum_to_double(a);
-      g = sexp_flonum_value(b);
-      if (isnan(g))
+      if (isinf(sexp_flonum_value(b))) {
+        r = sexp_flonum_value(b) > 0 ? SEXP_NEG_ONE : SEXP_ONE;
+      } else if (isnan(sexp_flonum_value(b))) {
         r = sexp_xtype_exception(ctx, NULL, "can't compare NaN", b);
-      else
-        r = sexp_make_fixnum(f < g ? -1 : f == g ? 0 : 1);
+      } else {
+        r = sexp_compare(ctx, a, tmp=sexp_inexact_to_exact(ctx, NULL, 1, b));
+      }
       break;
     case SEXP_NUM_FIX_BIG:
       if ((sexp_bignum_hi(b) > 1) ||
@@ -1933,8 +1933,7 @@ sexp sexp_compare (sexp ctx, sexp a, sexp b) {
       } else if (isnan(f)) {
         r = sexp_xtype_exception(ctx, NULL, "can't compare NaN", a);
       } else {
-        g = sexp_ratio_to_double(ctx, b);
-        r = sexp_make_fixnum(f < g ? -1 : f == g ? 0 : 1);
+        r = sexp_compare(ctx, tmp=sexp_inexact_to_exact(ctx, NULL, 1, a), b);
       }
       break;
     case SEXP_NUM_FIX_RAT:
@@ -1945,6 +1944,9 @@ sexp sexp_compare (sexp ctx, sexp a, sexp b) {
       r = sexp_ratio_compare(ctx, a, b);
       break;
 #endif
+    default:
+      r = sexp_xtype_exception(ctx, NULL, "unknown comparison", a);
+      break;
     }
   }
   sexp_gc_release1(ctx);

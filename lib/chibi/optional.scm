@@ -9,9 +9,11 @@
 (define-syntax let*-to-let
   (syntax-rules ()
     ((let*-to-let letstar ls (vars ...) ((v . d) . rest) . body)
-     (let*-to-let letstar ls (vars ... (v tmp . d)) rest . body))
-    ((let*-to-let letstar ls ((var tmp . d) ...) rest . body)
-     (letstar ls ((tmp . d) ... . rest)
+     (let*-to-let letstar ls (vars ... (v tmp (tmp . d))) rest . body))
+    ((let*-to-let letstar ls (vars ...) (v . rest) . body)
+     (let*-to-let letstar ls (vars ... (v tmp tmp)) rest . body))
+    ((let*-to-let letstar ls ((var tmp bind) ...) rest . body)
+     (letstar ls (bind ... . rest)
        (let ((var tmp) ...) . body)))))
 
 ;;> \macro{(let-optionals ls ((var default) ... [rest]) body ...)}
@@ -27,6 +29,9 @@
 ;;> \var{rest} var is specified, then it is bound to any remaining
 ;;> elements of \var{ls} beyond the length of \var{ls}, otherwise any
 ;;> extra values are unused.
+;;>
+;;> \var{ls} is evaluated only once.  It is an error if any
+;;> \var{default} mutates \var{ls}.
 ;;>
 ;;> Typically used on the dotted rest list at the start of a lambda,
 ;;> \scheme{let-optionals} is more concise and more efficient than
@@ -51,8 +56,8 @@
 
 (define-syntax let-optionals
   (syntax-rules ()
-    ((let-optionals ls ((var default) ... . rest) body ...)
-     (let*-to-let let-optionals* ls () ((var default) ... . rest) body ...))))
+    ((let-optionals ls (var&default ... . rest) body ...)
+     (let*-to-let let-optionals* ls () (var&default ... . rest) body ...))))
 
 ;;> \macro{(let-optionals* ls ((var default) ... [rest]) body ...)}
 ;;>
@@ -71,18 +76,17 @@
 (define-syntax opt-lambda
   (syntax-rules ()
     ((opt-lambda vars . body)
-     (opt-lambda/aux () vars . body))))
+     (lambda args (let-optionals args vars . body)))))
 
-(define-syntax opt-lambda/aux
+;;> \macro{(opt-lambda* ((var default) ... [rest]) body ...)}
+;;>
+;;> Variant of \scheme{opt-lambda} which binds using
+;;> \scheme{let-optionals*}.
+
+(define-syntax opt-lambda*
   (syntax-rules ()
-    ((opt-lambda/aux (args ...) ((var . default) . vars) . body)
-     (lambda (args ... . o)
-       (let-optionals o ((var . default) . vars) . body)))
-    ((opt-lambda/aux (args ...) (var . vars) . body)
-     (opt-lambda/aux (args ... var) vars . body))
-    ((opt-lambda/aux (args ...) () . body)
-     (lambda (args ... . o)
-       . body))))
+    ((opt-lambda* vars . body)
+     (lambda args (let-optionals* args vars . body)))))
 
 ;;> \macro{(define-opt (name (var default) ... [rest]) body ...)}
 ;;>
@@ -95,6 +99,24 @@
     ((define-opt (name . vars) . body)
      (define name (opt-lambda vars . body)))))
 
+;;> \macro{(define-opt* (name (var default) ... [rest]) body ...)}
+;;>
+;;> Shorthand for
+;;> \schemeblock{
+;;> (define name (opt-lambda* (var default) ... [rest]) body ...)}
+
+(define-syntax define-opt*
+  (syntax-rules ()
+    ((define-opt* (name . vars) . body)
+     (define name (opt-lambda* vars . body)))))
+
+(define (mem-key key ls)
+  (and (pair? ls)
+       (pair? (cdr ls))
+       (if (eq? key (car ls))
+           ls
+           (mem-key key (cddr ls)))))
+
 ;;> \procedure{(keyword-ref ls key [default])}
 ;;>
 ;;> Search for the identifier \var{key} in the list \var{ls}, treating
@@ -103,12 +125,8 @@
 ;;> \var{default}, or \scheme{#f}.
 
 (define (keyword-ref ls key . o)
-  (let lp ((ls ls))
-    (if (and (pair? ls) (pair? (cdr ls)))
-        (if (eq? key (car ls))
-            (cadr ls)
-            (lp (cddr ls)))
-        (and (pair? o) (car o)))))
+  (cond ((mem-key key ls) => (lambda (cell) (cadr cell)))
+        (else (and (pair? o) (car o)))))
 
 ;;> \macro{(keyword-ref* ls key default)}
 ;;>
@@ -118,7 +136,7 @@
 (define-syntax keyword-ref*
   (syntax-rules ()
     ((keyword-ref* ls key default)
-     (cond ((memq key ls) => cadr) (else default)))))
+     (cond ((mem-key key ls) => cadr) (else default)))))
 
 (define (symbol->keyword sym)
   (string->symbol (string-append (symbol->string sym) ":")))
@@ -144,13 +162,21 @@
 ;;> is not found, \var{var} is bound to \var{default}, even if unused
 ;;> names remain in \var{ls}.
 ;;>
+;;> Keyword arguments have precedence in CommonLisp, DSSSL, and SRFI
+;;> 89.  However, unlike these systems you cannot mix optional and
+;;> keyword arguments.
+;;>
 ;;> If an optional trailing identifier \var{rest} is provided, it is
 ;;> bound to the list of unused arguments not bound to any \var{var}.
+;;> This is useful for chaining together keyword argument procedures -
+;;> you can extract just the arguments you need and pass on the rest
+;;> to another procedure.  The \var{rest} usage is similar to Python's
+;;> \code{**args} (again predated by CommonLisp and DSSSL).
 ;;>
 ;;> Note R7RS does not have a disjoint keyword type or auto-quoting
-;;> syntax for keywords - they are simply identifiers.  Thus when
-;;> passing keyword arguments they must be quoted (or otherwise
-;;> dynamically evaluated).
+;;> syntax for keywords - they are simply identifiers (though no type
+;;> checking is performed).  Thus when passing keyword arguments they
+;;> must be quoted (or otherwise dynamically evaluated).
 ;;>
 ;;> \emph{Example:}
 ;;> \example{
@@ -171,12 +197,27 @@
 ;;>     ((a 0) (b 0) (c 0) rest)
 ;;>   (list a b c rest))
 ;;> }
+;;>
+;;> \emph{Example:}
+;;> \example{
+;;> (define (auth-wrapper proc)
+;;>   (lambda o
+;;>     (let-keywords o ((user #f)
+;;>                      (password #f)
+;;>                      rest)
+;;>       (if (authenticate? user password)
+;;>           (apply proc rest)
+;;>           (error "access denied")))))
+;;>
+;;> ((auth-wrapper make-payment) 'user: "bob" 'password: "5ecret" 'amount: 50)
+;;> }
 
 (define-syntax let-keywords
   (syntax-rules ()
     ((let-keywords ls vars . body)
      (let-key*-to-let ls () vars . body))))
 
+;; Returns the plist ls filtering out key-values found in keywords.
 (define (remove-keywords ls keywords)
   (let lp ((ls ls) (res '()))
     (if (and (pair? ls) (pair? (cdr ls)))
@@ -185,6 +226,8 @@
             (lp (cddr ls) (cons (cadr ls) (cons (car ls) res))))
         (reverse res))))
 
+;; Extracts the known keywords from a let-keyword spec and removes
+;; them from the opt-ls.
 (define-syntax remove-keywords*
   (syntax-rules ()
     ((remove-keywords* opt-ls (keys ...) ((var key default) . rest))
@@ -196,7 +239,7 @@
 
 ;;> \macro{(let-keywords* ls ((var [keyword] default) ... [rest]) body ...)}
 ;;>
-;;> \scheme{let*} equivalent to \scheme{let-keywords*}.  Any required
+;;> \scheme{let*} equivalent to \scheme{let-keywords}.  Any required
 ;;> \var{default} values are evaluated in left-to-right order, with
 ;;> all preceding \var{var}s in scope.
 ;;>

@@ -104,7 +104,9 @@
 (define (with-directory dir thunk)
   (let ((pwd (current-directory)))
     (dynamic-wind
-      (lambda () (change-directory dir))
+      (lambda ()
+        (if (not (change-directory dir))
+            (error "couldn't change directory" dir)))
       thunk
       (lambda () (change-directory pwd)))))
 
@@ -198,3 +200,10 @@
              (res (readlink file buf 512)))
         (and (positive? res)
              (substring buf 0 res))))))
+
+;;> Returns a new output-port for the path, creating it if needed
+;;> otherwise appending to it.
+(define (open-output-file/append path)
+  (let ((fd (open path
+                  (+ open/create open/write open/append open/non-block))))
+    (open-output-file-descriptor fd)))

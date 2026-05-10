@@ -1,5 +1,5 @@
 /*  features.h -- general feature configuration               */
-/*  Copyright (c) 2009-2015 Alex Shinn.  All rights reserved. */
+/*  Copyright (c) 2009-2021 Alex Shinn.  All rights reserved. */
 /*  BSD-style license: http://synthcode.com/license.txt       */
 
 /* uncomment this to disable most features */
@@ -23,15 +23,26 @@
 /*   sexp_init_library(ctx, env) function provided. */
 /* #define SEXP_USE_DL 0 */
 
-/* uncomment this to statically compile all C libs */
-/*   If set, this will statically include the clibs.c file */
-/*   into the standard environment, so that you can have */
-/*   access to a predefined set of C libraries without */
-/*   needing dynamic loading.  The clibs.c file is generated */
-/*   automatically by searching the lib directory for */
-/*   modules with include-shared, but can be hand-tailored */
-/*   to your needs. */
+/* uncomment this to support statically compiled C libs */
+/*   Unless SEXP_USE_STATIC_LIBS_EMPTY is set (see below), this */
+/*   will statically include the clibs.c file into the standard */
+/*   environment, so that you can have access to a predefined set */
+/*   of C libraries without needing dynamic loading.  The clibs.c */
+/*   file is generated automatically by searching the lib directory */
+/*   for modules with include-shared, but can be hand-tailored to */
+/*   your needs.  You can also register your own C libraries using */
+/*   sexp_add_static_libraries (see below). */
 /* #define SEXP_USE_STATIC_LIBS 1 */
+
+/* uncomment this to enable user exported C libs */
+/*   You can register your own C libraries using */
+/*   sexp_add_static_libraries.  Each entry in the supplied table, */
+/*   is a name/entry point pair.  These work as if they were */
+/*   dynamically loaded libraries, so naming follows the same */
+/*   conventions.  An entry {"foo", init_foo} will register a */
+/*   library that can be loaded with (load "foo"), or */
+/*   (include-shared "foo"), both of which will call init_foo. */
+/* #define SEXP_USE_STATIC_LIBS_EMPTY 1 */
 
 /* uncomment this to disable detailed source info for debugging */
 /*   By default Chibi will associate source info with every */
@@ -63,6 +74,15 @@
 /*   enable this when debugging your own extensions, or */
 /*   if you suspect a bug in the native GC. */
 /* #define SEXP_USE_BOEHM 1 */
+
+/* uncomment this to enable automatic file descriptor unification */
+/*   File descriptors as returned by C functions are raw integers, */
+/*   which are convereted to GC'ed first-class objects on the Scheme */
+/*   side.  By default we assume that each fd is new, however if this */
+/*   option is enabled and an fd is returned which matches an existing */
+/*   open fd, they are assumed to refer to the same descriptor and */
+/*   unified. */
+/* #define SEXP_USE_UNIFY_FILENOS_BY_NUMBER 1 */
 
 /* uncomment this to disable weak references */
 /* #define SEXP_USE_WEAK_REFERENCES 0 */
@@ -168,10 +188,26 @@
 /* uncomment this if you don't want 1## style approximate digits */
 /* #define SEXP_USE_PLACEHOLDER_DIGITS 0 */
 
+/* uncomment this to disable a workaround for numeric formatting, */
+/* to fix numbers in locales which don't use the '.' decimal sep */
+/* #define SEXP_USE_PATCH_NON_DECIMAL_NUMERIC_FORMATS 0 */
+
 /* uncomment this if you don't need extended math operations */
 /*   This includes the trigonometric and expt functions. */
 /*   Automatically disabled if you've disabled flonums. */
 /* #define SEXP_USE_MATH 0 */
+
+/* uncomment this to enable lenient matching of top-level bindings */
+/*   Historically, to match behavior with some other Schemes and in */
+/*   hopes of making it easier to use macros and modules, Chibi allowed */
+/*   top-level bindings with the same underlying symbol name to match */
+/*   with identifier=?.  In particular, there still isn't a good way */
+/*   to handle the case where auxiliary syntax conflicts with some other */
+/*   binding without renaming one or the other (though SRFI 206 helps). */
+/*   However, if people make use of this you can write Chibi programs */
+/*   which don't work portably in other implementations, which has been */
+/*   a source of confusion, so the default has reverted to strict R7RS. */
+/* #define SEXP_USE_STRICT_TOPLEVEL_BINDINGS 0 */
 
 /* uncomment this to disable warning about references to undefined variables */
 /*   This is something of a hack, but can be quite useful. */
@@ -231,6 +267,12 @@
 /*                                                                  */
 /* #define SEXP_USE_STRING_INDEX_TABLE 1 */
 
+/* uncomment this to cache a string cursor for string-ref calls */
+/*   The default is not to use a cache. The goal of caching is to   */
+/*   soften the performance impact of repeated O(n) string-ref      */
+/*   operations on the same string. */
+/* #define SEXP_USE_STRING_REF_CACHE 1 */
+
 /* uncomment this to disable automatic closing of ports */
 /*   If enabled, the underlying FILE* for file ports will be */
 /*   automatically closed when they're garbage collected.  Doesn't */
@@ -259,7 +301,7 @@
 
 /* uncomment this to make the VM adhere to alignment rules */
 /*   This is required on some platforms, e.g. ARM */
-/* #define SEXP_USE_ALIGNED_BYTECODE */
+/* #define SEXP_USE_ALIGNED_BYTECODE 1 */
 
 /************************************************************************/
 /* These settings are configurable but only recommended for */
@@ -303,12 +345,21 @@
 #define SEXP_MAX_ANALYZE_DEPTH 8192
 #endif
 
+/* The size of flexible arrays (empty arrays at the end of a struct */
+/* representing the trailing data), when compiled with C++.  Technically */
+/* 0 is an illegal value here, and the C++ idiom is to use 1, but this */
+/* breaks compatibility with C when computing the size of structs, and */
+/* in practice all of the major C++ compilers support 0. */
+#ifndef SEXP_FLEXIBLE_ARRAY_SIZE
+#define SEXP_FLEXIBLE_ARRAY_SIZE 0
+#endif
+
 /************************************************************************/
 /*         DEFAULTS - DO NOT MODIFY ANYTHING BELOW THIS LINE            */
 /************************************************************************/
 
 #ifndef SEXP_64_BIT
-#if defined(__amd64) || defined(__x86_64) || defined(_WIN64) || defined(_Wp64) || defined(__LP64__) || defined(__PPC64__) || defined(__mips64__) || defined(__sparc64__)
+#if defined(__amd64) || defined(__x86_64) || defined(_WIN64) || defined(_Wp64) || defined(__LP64__) || defined(__PPC64__) || defined(__mips64__) || defined(__sparc64__) || defined(__arm64)
 #define SEXP_64_BIT 1
 #else
 #define SEXP_64_BIT 0
@@ -427,13 +478,17 @@
 #endif
 #endif
 
+#ifndef SEXP_USE_STATIC_LIBS_EMPTY
+#define SEXP_USE_STATIC_LIBS_EMPTY 0
+#endif
+
 #ifndef SEXP_USE_STATIC_LIBS
-#define SEXP_USE_STATIC_LIBS 0
+#define SEXP_USE_STATIC_LIBS SEXP_USE_STATIC_LIBS_EMPTY
 #endif
 
 /* don't include clibs.c - include separately or link */
 #ifndef SEXP_USE_STATIC_LIBS_NO_INCLUDE
-#ifdef PLAN9
+#if defined(PLAN9) || SEXP_USE_STATIC_LIBS_EMPTY
 #define SEXP_USE_STATIC_LIBS_NO_INCLUDE 0
 #else
 #define SEXP_USE_STATIC_LIBS_NO_INCLUDE 1
@@ -452,8 +507,16 @@
 #define SEXP_USE_BOEHM 0
 #endif
 
+#ifdef SEXP_USE_UNIFY_FILENOS_BY_NUMBER
+#define SEXP_USE_UNIFY_FILENOS_BY_NUMBER 0
+#endif
+
 #ifndef SEXP_USE_WEAK_REFERENCES
+#if SEXP_USE_UNIFY_FILENOS_BY_NUMBER
+#define SEXP_USE_WEAK_REFERENCES 1
+#else
 #define SEXP_USE_WEAK_REFERENCES ! SEXP_USE_NO_FEATURES
+#endif
 #endif
 
 #ifndef SEXP_USE_FIXED_CHUNK_SIZE_HEAPS
@@ -553,7 +616,7 @@
 #endif
 
 #ifndef SEXP_USE_STRICT_TOPLEVEL_BINDINGS
-#define SEXP_USE_STRICT_TOPLEVEL_BINDINGS 0
+#define SEXP_USE_STRICT_TOPLEVEL_BINDINGS 1
 #endif
 
 #if SEXP_USE_STRICT_TOPLEVEL_BINDINGS
@@ -627,6 +690,10 @@
 #define SEXP_PLACEHOLDER_DIGIT '#'
 #endif
 
+#ifndef SEXP_USE_PATCH_NON_DECIMAL_NUMERIC_FORMATS
+#define SEXP_USE_PATCH_NON_DECIMAL_NUMERIC_FORMATS 1
+#endif
+
 #ifndef SEXP_USE_MATH
 #define SEXP_USE_MATH SEXP_USE_FLONUMS && ! SEXP_USE_NO_FEATURES
 #endif
@@ -649,6 +716,10 @@
 
 #ifndef SEXP_USE_UNIFORM_VECTOR_LITERALS
 #define SEXP_USE_UNIFORM_VECTOR_LITERALS ! SEXP_USE_NO_FEATURES
+#endif
+
+#ifndef SEXP_USE_MINI_FLOAT_UNIFORM_VECTORS
+#define SEXP_USE_MINI_FLOAT_UNIFORM_VECTORS ! SEXP_USE_NO_FEATURES
 #endif
 
 #ifndef SEXP_USE_BYTEVECTOR_LITERALS

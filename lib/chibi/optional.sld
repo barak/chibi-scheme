@@ -1,7 +1,10 @@
 
 (define-library (chibi optional)
-  (export let-optionals let-optionals* opt-lambda define-opt
-          let-keywords let-keywords* keyword-ref keyword-ref*)
+  (export let-optionals let-optionals*
+          opt-lambda opt-lambda*
+          define-opt define-opt*
+          let-keywords let-keywords*
+          keyword-ref keyword-ref*)
   (cond-expand
    (chibi
     (import (chibi))
@@ -29,11 +32,11 @@
            (let ((tmp (op . args)))
              (let-optionals* tmp vars . body)))
           ((let-optionals* tmp ((var default) . rest) . body)
-           (let ((var (if (pair? tmp) (car tmp) default))
-                 (tmp2 (if (pair? tmp) (cdr tmp) '())))
+           (let* ((tmp2 (if (pair? tmp) (cdr tmp) '()))
+                  (var (if (pair? tmp) (car tmp) default)))
              (let-optionals* tmp2 rest . body)))
           ((let-optionals* tmp tail . body)
-           (let ((tail tmp)) . body))))
+           (let ((tail (list-copy tmp))) . body))))
       (define-syntax symbol->keyword*
         (syntax-rules ()
           ((symbol->keyword* sym)

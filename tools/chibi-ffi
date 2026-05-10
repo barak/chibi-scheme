@@ -31,7 +31,7 @@
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;; globals
 
-(define *ffi-version* "0.4")
+(define *ffi-version* "0.5")
 (define *types* '())
 (define *type-getters* '())
 (define *type-setters* '())
@@ -53,7 +53,7 @@
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;; type objects
 
-(define (make-type) (make-vector 19 #f))
+(define (make-type) (make-vector 20 #f))
 
 (define (type-base type) (vector-ref type 0))
 (define (type-free? type) (vector-ref type 1))
@@ -73,8 +73,9 @@
 (define (type-address-of? type) (vector-ref type 15))
 (define (type-no-free? type) (vector-ref type 16))
 (define (type-as-sexp type) (vector-ref type 17))
-(define (type-index type) (vector-ref type 18))
-(define (type-index-set! type i) (vector-set! type 18 i))
+(define (type-move? type) (vector-ref type 18))
+(define (type-index type) (vector-ref type 19))
+(define (type-index-set! type i) (vector-set! type 19 i))
 
 (define (spec->type type . o)
   (let ((res (make-type)))
@@ -136,6 +137,9 @@
         ((as-sexp)
          (vector-set! res 17 #t)
          (lp (next)))
+        ((move)
+         (vector-set! res 18 #t)
+         (lp (next)))
         (else
          (let ((base (if (and (pair? type) (null? (cdr type)))
                          (car type)
@@ -195,8 +199,7 @@
   (syntax-rules ()
     ((define-c-int-type type)
      (if (not (memq 'type *c-int-types*))
-         (set! *c-int-types* (cons 'type *c-int-types*)))
-     #f)))
+         (set! *c-int-types* (cons 'type *c-int-types*))))))
 
 (define-syntax define-c-enum
   ;; TODO: support conversion to/from symbolic names
@@ -215,22 +218,23 @@
 
 (define (signed-int-type? type)
   (or (memq type '(signed-char short int long s8 s16 s32 s64
-                   int8_t int16_t int32_t int64_t))
+                   int8_t int16_t int32_t int64_t
+                   pid_t off_t ssize_t blkcnt_t blksize_t))
       (memq type *c-int-types*)
       (enum-type? type)))
 
 (define (unsigned-int-type? type)
   (memq type '(unsigned-char unsigned-short unsigned unsigned-int unsigned-long
-               size_t off_t time_t clock_t dev_t ino_t mode_t nlink_t
+               size_t time_t clock_t dev_t ino_t mode_t nlink_t
                uint8_t uint16_t uint32_t uint64_t
-               uid_t gid_t pid_t blksize_t blkcnt_t sigval_t
+               uid_t gid_t sigval_t
                u1 u8 u16 u32 u64)))
 
 (define (int-type? type)
   (or (signed-int-type? type) (unsigned-int-type? type)))
 
 (define (float-type? type)
-  (memq type '(float double long-double long-long-double f32 f64)))
+  (memq type '(float double long-double long-long-double f8 f16 f32 f64)))
 
 (define (string-type? type)
   (or (memq type '(char* string env-string non-null-string))
@@ -274,6 +278,8 @@
     ((s32vector) 'SEXP_S32)
     ((u64vector) 'SEXP_U64)
     ((s64vector) 'SEXP_S64)
+    ((f8vector) 'SEXP_F8)
+    ((f16vector) 'SEXP_F16)
     ((f32vector) 'SEXP_F32)
     ((f64vector) 'SEXP_F64)
     ((c64vector) 'SEXP_C64)
@@ -296,6 +302,8 @@
     ((s32vector) "int32_t*")
     ((u64vector) "uint64_t*")
     ((s64vector) "int64_t*")
+    ((f8vector) "unsigned char*")
+    ((f16vector) "unsigned short*")
     ((f32vector) "float*")
     ((f64vector) "double*")
     ((c64vector) "float*")
@@ -326,9 +334,10 @@
          (inline (and (> (length func) 3)
                       (cond ((assq 'inline (cdr (cddr func))) => cadr)
                             (else #f))))
-         (assert (and (> (length func) 3)
-                      (cond ((assq 'assert (cdr (cddr func))) => cdr)
-                            (else '())))))
+         (assert (or (and (> (length func) 3)
+                          (cond ((assq 'assert (cdr (cddr func))) => cdr)
+                                (else #f)))
+                     '())))
     (let lp ((ls (if (equal? (car (cddr func)) '(void)) '() (car (cddr func))))
              (i 0)
              (results '())
@@ -639,9 +648,9 @@
                       (let ((e (x->string errno)))
                         (string-append "    case " e ": return \"" e "\";\n")))
                     errnos)
-             
+
              "  }
-  snprintf(buf, 64, \"unknown error: %d\", err);
+  snprintf(buf, sizeof(buf), \"unknown error: %d\", err);
   return buf;
 }")))))))
 
@@ -684,6 +693,12 @@
    (lambda (expr rename compare)
      (ensure-c++ 'c++-using)
      `(,(rename 'cat) "using " ',(cadr expr) ";\n"))))
+
+(define-syntax c++-using-namespace
+  (er-macro-transformer
+   (lambda (expr rename compare)
+     (ensure-c++ 'c++-using-namespace)
+     `(,(rename 'cat) "using namespace " ',(cadr expr) ";\n"))))
 
 (define-syntax define-c++-method
   (er-macro-transformer
@@ -738,6 +753,8 @@
         ((s32vector) "sexp_s32vectorp")
         ((u64vector) "sexp_u64vectorp")
         ((s64vector) "sexp_s64vectorp")
+        ((f8vector) "sexp_f8vectorp")
+        ((f16vector) "sexp_f16vectorp")
         ((f32vector) "sexp_f32vectorp")
         ((f64vector) "sexp_f64vectorp")
         ((c64vector) "sexp_c64vectorp")
@@ -947,7 +964,7 @@
     ((string env-string non-null-string bytevector u8vector)
      (if *c++?* "string" "char*"))
     ((fileno fileno-nonblock) "int")
-    ((u1 u8 u16 u32 u64 s8 s16 s32 s64 f32 f64)
+    ((u1 u8 u16 u32 u64 s8 s16 s32 s64 f8 f16 f32 f64)
      (let ((a
             (uniform-vector-ctype
              (string->symbol
@@ -1261,20 +1278,39 @@
          (cat "  sexp_check_block_port(ctx, arg" (type-index a) ", 0);\n")))
    args))
 
-(define (write-scheme->c expr)
+(define (string-has-prefix? str prefix)
+  (let ((prefix-len (string-length prefix)))
+    (and (>= (string-length str) prefix-len)
+         (equal? (substring str 0 prefix-len) prefix))))
+
+(define (write-scheme->c expr . o)
   (define (write-numeric-arg x)
     (if (symbol? x)
-        (cat "sexp_unbox_fixnum(" x ")")
+        (let ((func (and (pair? o) (car o)))
+              (sym-name (symbol->string x)))
+          (if (and func
+                   (string-has-prefix? sym-name "arg")
+                   (unsigned-int-type?
+                    (type-base
+                     (list-ref (func-c-args func)
+                               (string->number (substring sym-name 3))))))
+              (cat "sexp_uint_value(" x ")")
+              (cat "sexp_sint_value(" x ")")))
         (write-scheme->c x)))
   (if (pair? expr)
       (case (car expr)
         ((+ - * / %)
-         (write-scheme->c (cadr expr))
-         (for-each
-          (lambda (x)
-            (cat " " (car expr) " ")
-            (write-numeric-arg x))
-          (cddr expr)))
+         (let ((expr (if (and (null? (cddr expr)) (memq (car expr) '(- /)))
+                         `(,(car expr)
+                           ,(if (eq? '- (car expr)) 0 1)
+                           ,@(cdr expr))
+                         expr)))
+           (write-scheme->c (cadr expr))
+           (for-each
+            (lambda (x)
+              (cat " " (car expr) " ")
+              (write-numeric-arg x))
+            (cddr expr))))
         ((< <= == != >= >)
          (let lp ((ls (cdr expr)))
            (cat "(" (lambda () (write-numeric-arg (car ls))) " " (car expr)
@@ -1284,6 +1320,15 @@
             ((pair? (cddr ls))
              (display " && ")
              (lp (cdr ls))))))
+        ((expt)
+         (if (and (integer? (cadr expr))
+                  (integer? (car (cddr expr))))
+             (write-scheme->c (expt (cadr expr) (car (cddr expr))))
+             (cat "pow("
+                  (lambda () (write-numeric-arg (cadr expr)))
+                  ", "
+                  (lambda () (write-numeric-arg (car (cddr expr))))
+                  ")")))
         (else
          (write (scheme-procedure->c (car expr)))
          (display "(")
@@ -1296,17 +1341,47 @@
          (display ")")))
       (write expr)))
 
+(define (extract-irritants expr)
+  (reverse
+   (let lp ((args (cdr expr))
+            (irr '()))
+     (cond
+      ((null? args) irr)
+      ((identifier? (car args)) (lp (cdr args) (cons (car args) irr)))
+      ((pair? (car args))
+       ;; pass length rather than vector objects to avoid huge error messages
+       (if (and (memq (caar args)
+                      '(length bytevector-length u8vector-length uvector-length))
+                (pair? (cdar args))
+                (identifier? (car (cdar args))))
+           (lp (cdr args)
+               ;; sexp_length returns sexp, the others int
+               (cons (if (eq? 'length (caar args))
+                         (car args)
+                         (list 'sexp_make_fixnum (car args)))
+                     irr))
+           (lp (cdr args) (lp (cdar args) irr))))
+      (else (lp (cdr args) irr))))))
+
 (define (write-assertions func asserts)
   (for-each
    (lambda (assert)
-     (cat "  if (!(" (lambda () (write-scheme->c assert)) ")) {\n"
-          "    return sexp_user_exception(ctx, self, \"assertion failed: \" "
-          (call-with-output-string
-            (lambda (out)
-              (write (call-with-output-string
-                       (lambda (out) (write assert out))) out)))
-          ", SEXP_NULL);\n"
-          "  }\n"))
+     (let ((irr-ls (extract-irritants assert)))
+       (cat "  if (!(" (lambda () (write-scheme->c assert func)) ")) {\n"
+            "    return sexp_user_exception_ls(ctx, self, \"assertion failed: \" "
+            (call-with-output-string
+              (lambda (out)
+                (write (call-with-output-string
+                         (lambda (out) (write assert out))) out)))
+            ", " (length irr-ls)
+            (lambda ()
+              (for-each
+               (lambda (irr)
+                 (cat ", ")
+                 (write-scheme->c irr))
+               irr-ls))
+            ");\n"
+            "  }\n")))
    asserts))
 
 (define (scheme-procedure->c name)
@@ -1316,6 +1391,8 @@
    ((eq? name 'string-size) 'sexp_string_size)
    ((memq name '(bytevector-length u8vector-length)) 'sexp_bytes_length)
    ((eq? name 'uvector-length) 'sexp_uvector_length)
+   ((eq? name 'immutable?) 'sexp_immutablep)
+   ((eq? name 'mutable?) 'sexp_mutablep)
    (else name)))
 
 (define (write-value func val)
@@ -1437,7 +1514,8 @@
 (define (write-call func)
   (let ((ret-type (func-ret-type func))
         (c-name (func-c-name func))
-        (c-args (func-c-args func)))
+        (c-args (func-c-args func))
+        (link (find type-link? (func-c-args func))))
     (if (any type-auto-expand? (func-c-args func))
         (cat " loop:\n"))
     (cat (cond ;;((void-type? ret-type) "")
@@ -1464,11 +1542,10 @@
           (write-actual-parameter func arg))
         (if (func-method? func) (cdr c-args) c-args))
        (cat ")"))
-     (cond
-      ((find type-link? (func-c-args func))
-       => (lambda (a) (string-append "arg" (type-index-string a))))
-      (else #f)))
+     (and link (string-append "arg" (type-index-string link))))
     (cat ";\n")
+    ;; (if (and *c++?* (type-new? ret-type) link)
+    ;;     (cat "  sexp_preserve_object(ctx, arg" (type-index-string link) ");\n"))
     (if (type-array ret-type)
         (write-result ret-type)
         (write-result-adjustment ret-type))))
@@ -1657,7 +1734,10 @@
             (or (not (type-array a))
                 (not (integer? (get-array-length func a)))))
        ;; the above is hairy - basically this frees temporary strings
-       (cat "  free(tmp" (type-index a) ");\n"))))
+       (cat "  free(tmp" (type-index a) ");\n"))
+      ((and (type-move? a) (or (type-pointer? a) (not (basic-type? a))))
+       (cat "  sexp_cpointer_value(arg" (type-index a) ") = NULL;  /* moved */\n"
+            "  sexp_cpointer_freep(arg" (type-index a) ") = 0;\n"))))
    (func-c-args func))
   (let* ((results (func-results func))
          (return-res? (not (error-type? (func-ret-type func))))
@@ -1807,7 +1887,7 @@
                (cat (cond ((not default) 0)
                           ((parameter-default? (type-value default)) 3)
                           (else 1))
-                    ", "))
+                    ", \"" (func-stub-name func) "\", "))
              "")
          (func-stub-name func)
          (cond
@@ -1912,8 +1992,10 @@
                       (memq 'finalizer-method: type))
                   => (lambda (x)
                        (let ((name (cadr x)))
-                         (generate-stub-name
-                          (if (pair? name) (car name) name)))))
+                         (if name
+                             (generate-stub-name
+                              (if (pair? name) (car name) name))
+                             'NULL))))
                  (*c++?*
                   (type-finalizer-name name))
                  (else
@@ -2062,25 +2144,27 @@
                 (scheme-name (if (pair? y) (car y) y))
                 (cname (if (pair? y) (cadr y) y))
                 (method? (not (memq 'finalizer: type))))
-           (cat "sexp " (generate-stub-name scheme-name)
-                " (sexp ctx, sexp self, sexp_sint_t n, sexp x) {\n"
-                "  if (sexp_cpointer_freep(x)) {\n"
-                "    " (if method? "" cname) "("
-                (if method? "(" "")
-                "\n#ifdef __cplusplus\n"
-                "(" (mangle name) "*)"
-                "\n#endif\n"
-                "sexp_cpointer_value(x)"
-                (if method? (string-append ")->" (x->string cname) "()") "")
-                ");\n"
-                ;; TODO: keep track of open/close separately from ownership
-                "    sexp_cpointer_freep(x) = 0;\n"
-                "  }\n"
-                "  return SEXP_VOID;\n"
-                "}\n\n")
-           ;; make the finalizer available
-           (set! *funcs*
-                 (cons (parse-func `(void ,y (,name))) *funcs*))))))
+           (cond
+            (y
+             (cat "sexp " (generate-stub-name scheme-name)
+                  " (sexp ctx, sexp self, sexp_sint_t n, sexp x) {\n"
+                  "  if (sexp_cpointer_freep(x)) {\n"
+                  "    " (if method? "" cname) "("
+                  (if method? "(" "")
+                  "\n#ifdef __cplusplus\n"
+                  "(" (mangle name) "*)"
+                  "\n#endif\n"
+                  "sexp_cpointer_value(x)"
+                  (if method? (string-append ")->" (x->string cname) "()") "")
+                  ");\n"
+                  ;; TODO: keep track of open/close separately from ownership
+                  "    sexp_cpointer_freep(x) = 0;\n"
+                  "  }\n"
+                  "  return SEXP_VOID;\n"
+                  "}\n\n")
+             ;; make the finalizer available
+             (set! *funcs*
+                   (cons (parse-func `(void ,y (,name))) *funcs*))))))))
   ;; maybe write constructor
   (cond
    ((memq 'constructor: type)
@@ -2230,10 +2314,12 @@
            (cat
             "sexp " finalizer-name " ("
             "sexp ctx, sexp self, sexp_sint_t n, sexp obj) {\n"
-            "  if (sexp_cpointer_freep(obj))\n"
+            "  if (sexp_cpointer_value(obj) && sexp_cpointer_freep(obj))\n"
             "    delete static_cast<" name "*>"
             "(sexp_cpointer_value(obj));\n"
             "  sexp_cpointer_value(obj) = NULL;\n"
+            ;; "  if (sexp_cpointer_parent(obj) && sexp_pointerp(sexp_cpointer_parent(obj)))\n"
+            ;; "    sexp_release_object(ctx, sexp_cpointer_parent(obj));\n"
             "  return SEXP_VOID;\n"
             "}\n\n")))))
      *types*)))
@@ -2321,7 +2407,7 @@
              compile?
              cc
              cflags
-             (append features (string-split (cadr args) #\,))))
+             (append features (map string->symbol (string-split (cadr args) #\,)))))
         (else
          (error "unknown option" (car args)))))
      (else

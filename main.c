@@ -9,25 +9,27 @@
 #include "chibi/eval.h"
 #include "chibi/gc_heap.h"
 
-#define sexp_argv_symbol "command-line"
+#define sexp_command_line_symbol "command-line"
+#define sexp_raw_script_file_symbol "raw-script-file"
 
 #define sexp_import_prefix "(import ("
 #define sexp_import_suffix "))"
-#define sexp_environment_prefix "(environment '("
+#define sexp_environment_prefix "(mutable-environment '("
 #define sexp_environment_suffix "))"
 #define sexp_trace_prefix "(module-env (load-module '("
 #define sexp_trace_suffix ")))"
-#define sexp_default_environment "(environment '(scheme small))"
+#define sexp_default_environment "(mutable-environment '(scheme small))"
 #define sexp_advice_environment "(load-module '(chibi repl))"
 
 #define sexp_version_string "chibi-scheme "sexp_version" \""sexp_release_name"\" "
 
 #ifdef PLAN9
 #define exit_failure() exits("ERROR")
+#define exit_success() exits(nil)
 #else
 #define exit_failure() exit(70)
-#endif
 #define exit_success() exit(0)
+#endif
 
 #if SEXP_USE_MAIN_HELP
 void sexp_usage(int err) {
@@ -58,6 +60,9 @@ void sexp_usage(int err) {
 #if SEXP_USE_IMAGE_LOADING
          "  -d <file>    - dump an image file and exit\n"
          "  -i <file>    - load an image file\n"
+#endif
+#if SEXP_USE_GREEN_THREADS
+         "  -b           - Make stdio nonblocking\n"
 #endif
          );
   if (err == 0) exit_success();
@@ -182,14 +187,12 @@ static sexp_uint_t multiplier (char c) {
 #endif
 
 static char* make_import(const char* prefix, const char* mod, const char* suffix) {
-  int preflen = strlen(prefix), modlen = strlen(mod);
-  int len = preflen + modlen + strlen(suffix);
-  int suflen = strlen(suffix) + (mod[0] == '(' ? 1 : 0);
-  char *p, *impmod = (char*) malloc(len+1);
-  snprintf(impmod, len, "%s", prefix);
-  snprintf(impmod+preflen, len-preflen, "%s", mod[0] == '(' ? mod + 1 : mod);
-  snprintf(impmod+len-suflen, suflen+1, "%s", suffix);
-  impmod[len] = '\0';
+  char *impmod, *p;
+  size_t impmodsize;
+  if (mod[0] == '(') mod++;
+  impmodsize = strlen(prefix) + strlen(mod) + strlen(suffix) + 1;
+  impmod = (char*) malloc(impmodsize);
+  snprintf(impmod, impmodsize, "%s%s%s", prefix, mod, suffix);
   for (p=impmod; *p; p++)
     if (*p == '.') *p=' ';
   return impmod;
@@ -211,7 +214,7 @@ static sexp check_exception (sexp ctx, sexp res) {
     if (! sexp_oportp(err))
       err = sexp_make_output_port(ctx, stderr, SEXP_FALSE);
     sexp_print_exception(ctx, res, err);
-    sexp_stack_trace(ctx, err);
+    sexp_print_exception_stack_trace(ctx, res, err);
 #if SEXP_USE_MAIN_ERROR_ADVISE
     if (sexp_envp(sexp_global(ctx, SEXP_G_META_ENV))) {
       advise = sexp_eval_string(ctx, sexp_advice_environment, -1, sexp_global(ctx, SEXP_G_META_ENV));
@@ -239,7 +242,7 @@ static sexp sexp_add_import_binding (sexp ctx, sexp env) {
   tmp = sexp_env_ref(ctx, sexp_meta_env(ctx), sym, SEXP_VOID);
   sym = sexp_intern(ctx, "import", -1);
   sexp_env_define(ctx, env, sym, tmp);
-  sexp_gc_release3(ctx);
+  sexp_gc_release2(ctx);
   return env;
 }
 
@@ -286,7 +289,7 @@ static void do_init_context (sexp* ctx, sexp* env, sexp_uint_t heap_size,
 
 #define load_init(bootp) if (! init_loaded++) do {                      \
       init_context();                                                   \
-      check_exception(ctx, env=sexp_load_standard_repl_env(ctx, env, SEXP_SEVEN, bootp, nonblocking)); \
+      check_exception(ctx, env=sexp_load_standard_repl_env(ctx, env, standard, bootp, nonblocking)); \
     } while (0)
 
 /* static globals for the sake of resuming from within emscripten */
@@ -304,7 +307,7 @@ sexp run_main (int argc, char **argv) {
   sexp_sint_t i, j, c, quit=0, print=0, init_loaded=0, mods_loaded=0,
     fold_case=SEXP_DEFAULT_FOLD_CASE_SYMS, nonblocking=0;
   sexp_uint_t heap_size=0, heap_max_size=SEXP_MAXIMUM_HEAP_SIZE;
-  sexp out=SEXP_FALSE, ctx=NULL, ls;
+  sexp out=SEXP_FALSE, ctx=NULL, ls, res=SEXP_ZERO, standard=SEXP_SEVEN;
   sexp_gc_var4(tmp, sym, args, env);
   args = SEXP_NULL;
   env = NULL;
@@ -316,7 +319,7 @@ sexp run_main (int argc, char **argv) {
     main_symbol = "main";
     /* skip option parsing since we can't pass `--` before the name of script */
     /* to avoid misinterpret the name as options when the interpreter is */
-    /* executed via `#!/usr/env/bin scheme-r7rs` shebang.  */
+    /* executed via `#!/usr/bin/env scheme-r7rs` shebang.  */
     i = 1;
     goto done_options;
   }
@@ -501,6 +504,15 @@ sexp run_main (int argc, char **argv) {
     case 'r':
       main_symbol = argv[i][2] == '\0' ? "main" : argv[i]+2;
       break;
+    case 'S':
+      arg = ((argv[i][2] == '\0') ? argv[++i] : argv[i]+2);
+      j = atoi(arg);
+      if (0 < j && j <= 1000) {
+        standard = sexp_make_fixnum(j);
+      } else {
+        fprintf(stderr, "-S<standard> should be an integer in [1, 1000] but got %s\n", arg);
+      }
+      break;
     case 's':
       init_context(); sexp_global(ctx, SEXP_G_STRICT_P) = SEXP_TRUE;
       handle_noarg();
@@ -516,6 +528,10 @@ sexp run_main (int argc, char **argv) {
 #if SEXP_USE_MODULES
       check_nonull_arg('t', arg);
       suffix = strrchr(arg, '.');
+      if (suffix == NULL) {
+        fprintf(stderr, "trace expected: -t module.name.binding, e.g. srfi.1.iota, but got %s\n", arg);
+        break;
+      }
       sym = sexp_intern(ctx, suffix + 1, -1);
       *(char*)suffix = '\0';
       impmod = make_import(sexp_trace_prefix, arg, sexp_trace_suffix);
@@ -545,15 +561,22 @@ sexp run_main (int argc, char **argv) {
  done_options:
   if (!quit || main_symbol != NULL) {
     init_context();
-    /* build argument list */
-    if (i < argc)
-      for (j=argc-1; j>=i; j--)
-        args = sexp_cons(ctx, tmp=sexp_c_string(ctx,argv[j],-1), args);
-    /* if no script name, use interpreter name */
-    if (i >= argc || main_module != NULL)
-      args = sexp_cons(ctx, tmp=sexp_c_string(ctx,argv[0],-1), args);
     load_init(i < argc || main_symbol != NULL);
-    sexp_set_parameter(ctx, sexp_meta_env(ctx), sym=sexp_intern(ctx, sexp_argv_symbol, -1), args);
+    tmp = SEXP_FALSE;
+    if ((i < argc) && !main_symbol)
+      tmp = sexp_c_string(ctx,argv[i],-1);
+    sexp_env_define(
+      ctx, sexp_meta_env(ctx),
+      sym=sexp_intern(ctx, sexp_raw_script_file_symbol, -1), tmp);
+    for (j=argc-1; j>=i; j--)
+      args = sexp_cons(ctx, tmp=sexp_c_string(ctx,argv[j],-1), args);
+    if (main_module)
+      args = sexp_cons(ctx, tmp=sexp_c_string(ctx,main_symbol,-1), args);
+    if (args == SEXP_NULL)
+      args = sexp_cons(ctx, tmp=sexp_c_string(ctx,"",-1), args);
+    sexp_set_parameter(
+      ctx, sexp_meta_env(ctx),
+      sym=sexp_intern(ctx, sexp_command_line_symbol, -1), args);
     if (i >= argc && main_symbol == NULL) {
       /* no script or main, run interactively */
       repl(ctx, env);
@@ -624,7 +647,7 @@ sexp run_main (int argc, char **argv) {
         tmp = sexp_env_ref(ctx, env, sym, SEXP_FALSE);
         if (sexp_procedurep(tmp)) {
           args = sexp_list1(ctx, args);
-          check_exception(ctx, sexp_apply(ctx, tmp, args));
+          res = check_exception(ctx, sexp_apply(ctx, tmp, args));
         } else {
           fprintf(stderr, "couldn't find main binding: %s in %s\n", main_symbol, main_module ? main_module : argv[i]);
         }
@@ -637,7 +660,7 @@ sexp run_main (int argc, char **argv) {
     fprintf(stderr, "destroy_context error\n");
     return SEXP_FALSE;
   }
-  return SEXP_TRUE;
+  return res;
 }
 
 #ifdef EMSCRIPTEN
@@ -653,11 +676,24 @@ void sexp_resume() {
 #endif
 
 int main (int argc, char **argv) {
+  sexp res;
 #if SEXP_USE_PRINT_BACKTRACE_ON_SEGFAULT
   signal(SIGSEGV, sexp_segfault_handler); 
 #endif
   sexp_scheme_init();
-  if (run_main(argc, argv) == SEXP_FALSE) {
+  res = run_main(argc, argv);
+  if (sexp_fixnump(res)) {
+    int code = sexp_unbox_fixnum(res);
+#ifdef PLAN9
+    if (code == 0) {
+      exit_success();
+    } else {
+      exit_failure();
+    }
+#else
+    return code;
+#endif
+  } else if (res == SEXP_FALSE) {
     exit_failure();
   } else {
     exit_success();

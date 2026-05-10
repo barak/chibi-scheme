@@ -45,7 +45,9 @@ void sexp_warn (sexp ctx, const char *msg, sexp x) {
   if (sexp_oportp(out)) {
     sexp_write_string(ctx, strictp ? "ERROR: " : "WARNING: ", out);
     sexp_write_string(ctx, msg, out);
-    sexp_write(ctx, x, out);
+    if (x != SEXP_UNDEF) {
+      sexp_write(ctx, x, out);
+    }
     sexp_write_char(ctx, '\n', out);
     if (strictp) sexp_stack_trace(ctx, out);
   }
@@ -221,7 +223,7 @@ sexp sexp_extend_env (sexp ctx, sexp env, sexp vars, sexp value) {
   e = sexp_alloc_type(ctx, env, SEXP_ENV);
   sexp_env_parent(e) = env;
   sexp_env_bindings(e) = SEXP_NULL;
-#if SEXP_USE_RENAME_BINDINGS
+#if SEXP_USE_STABLE_ABI || SEXP_USE_RENAME_BINDINGS
   sexp_env_renames(e) = SEXP_NULL;
 #endif
   for ( ; sexp_pairp(vars); vars = sexp_cdr(vars))
@@ -241,7 +243,7 @@ sexp sexp_extend_synclo_env (sexp ctx, sexp env) {
       e2 = e2 ? (sexp_env_parent(e2) = sexp_alloc_type(ctx, env, SEXP_ENV)) : e;
       sexp_env_bindings(e2) = sexp_env_bindings(e1);
       sexp_env_syntactic_p(e2) = 1;
-#if SEXP_USE_RENAME_BINDINGS
+#if SEXP_USE_STABLE_ABI || SEXP_USE_RENAME_BINDINGS
       sexp_env_renames(e2) = sexp_env_renames(e1);
 #endif
     }
@@ -361,6 +363,17 @@ sexp sexp_complete_bytecode (sexp ctx) {
 #if SEXP_USE_FULL_SOURCE_INFO
   if (sexp_bytecode_source(bc) && sexp_pairp(sexp_bytecode_source(bc))) {
     sexp_bytecode_source(bc) = sexp_nreverse(ctx, sexp_bytecode_source(bc));
+    /* omit the leading -1 source marker for the bytecode if the next */
+    /* entry is in the same file */
+    if (sexp_pairp(sexp_cdr(sexp_bytecode_source(bc))) &&
+        sexp_pairp(sexp_car(sexp_bytecode_source(bc))) &&
+        sexp_pairp(sexp_cdar(sexp_bytecode_source(bc))) &&
+        sexp_pairp(sexp_cadr(sexp_bytecode_source(bc))) &&
+        sexp_pairp(sexp_cdr(sexp_cadr(sexp_bytecode_source(bc)))) &&
+        sexp_cadr(sexp_car(sexp_bytecode_source(bc)))
+        == sexp_cadr(sexp_cadr(sexp_bytecode_source(bc)))) {
+      sexp_bytecode_source(bc) = sexp_cdr(sexp_bytecode_source(bc));
+    }
     sexp_bytecode_source(bc) = sexp_list_to_vector(ctx, sexp_bytecode_source(bc));
   }
 #endif
@@ -496,12 +509,12 @@ void sexp_init_eval_context_globals (sexp ctx) {
   sexp_init_eval_context_bytecodes(ctx);
 #endif
   sexp_global(ctx, SEXP_G_MODULE_PATH) = SEXP_NULL;
-  no_sys_path = getenv(SEXP_NO_SYSTEM_PATH_VAR);
-  if (!no_sys_path || strcmp(no_sys_path, "0")==0)
-    sexp_add_path(ctx, sexp_default_module_path);
   user_path = getenv(SEXP_MODULE_PATH_VAR);
   if (!user_path) user_path = sexp_default_user_module_path;
   sexp_add_path(ctx, user_path);
+  no_sys_path = getenv(SEXP_NO_SYSTEM_PATH_VAR);
+  if (!no_sys_path || strcmp(no_sys_path, "0")==0)
+    sexp_add_path(ctx, sexp_default_module_path);
 #if SEXP_USE_GREEN_THREADS
   sexp_global(ctx, SEXP_G_IO_BLOCK_ERROR)
     = sexp_user_exception(ctx, SEXP_FALSE, "I/O would block", SEXP_NULL);
@@ -613,8 +626,7 @@ static int sexp_contains_syntax_p_bound(sexp x, int depth) {
       if (i > 0 && (ls1 == ls2 || ls1 == sexp_car(ls2)))
         return 0; /* cycle, no synclo found, assume none */
     }
-    if (sexp_synclop(ls1))
-      return sexp_contains_syntax_p_bound(sexp_id_name(ls1), depth-1);
+    return sexp_contains_syntax_p_bound(ls1, depth-1);
   } else if (sexp_vectorp(x)) {
     for (i = 0; i < sexp_vector_length(x); ++i)
       if (sexp_contains_syntax_p_bound(sexp_vector_ref(x, sexp_make_fixnum(i)), depth-1))
@@ -653,6 +665,8 @@ sexp sexp_strip_synclos (sexp ctx, sexp self, sexp_sint_t n, sexp x) {
 
 sexp sexp_identifier_eq_op (sexp ctx, sexp self, sexp_sint_t n, sexp e1, sexp id1, sexp e2, sexp id2) {
   sexp cell1, cell2;
+  sexp_assert_type(ctx, sexp_envp, SEXP_ENV, e1);
+  sexp_assert_type(ctx, sexp_envp, SEXP_ENV, e2);
   cell1 = sexp_env_cell(ctx, e1, id1, 0);
   cell2 = sexp_env_cell(ctx, e2, id2, 0);
   if (cell1 && (cell1 == cell2))
@@ -753,6 +767,26 @@ static sexp analyze_seq (sexp ctx, sexp ls, int depth, int defok) {
   return res;
 }
 
+static sexp analyze_macro_once (sexp ctx, sexp x, sexp op, int depth) {
+  sexp res;
+  sexp_gc_var1(tmp);
+  sexp_gc_preserve1(ctx, tmp);
+  tmp = sexp_cons(ctx, sexp_macro_env(op), SEXP_NULL);
+  tmp = sexp_cons(ctx, sexp_context_env(ctx), tmp);
+  tmp = sexp_cons(ctx, x, tmp);
+  res = sexp_exceptionp(tmp) ? tmp : sexp_make_child_context(ctx, sexp_context_lambda(ctx));
+  if (!sexp_exceptionp(res) && !sexp_exceptionp(sexp_context_exception(ctx)))
+    res = sexp_apply(res, sexp_macro_proc(op), tmp);
+  if (sexp_pairp(sexp_car(tmp)) && sexp_pair_source(sexp_car(tmp))) {
+    if (sexp_pairp(res))
+      sexp_pair_source(res) = sexp_pair_source(sexp_car(tmp));
+    else if (sexp_exceptionp(res) && sexp_not(sexp_exception_source(x)))
+      sexp_exception_source(res) = sexp_pair_source(sexp_car(tmp));
+  }
+  sexp_gc_release1(ctx);
+  return res;
+}
+
 static sexp analyze_var_ref (sexp ctx, sexp x, sexp *varenv) {
   sexp env = sexp_context_env(ctx), res;
   sexp_gc_var1(cell);
@@ -772,29 +806,39 @@ static sexp analyze_var_ref (sexp ctx, sexp x, sexp *varenv) {
 
 static sexp analyze_set (sexp ctx, sexp x, int depth) {
   sexp res, varenv;
-  sexp_gc_var2(ref, value);
-  sexp_gc_preserve2(ctx, ref, value);
+  sexp_gc_var4(ref, value, cell, op);
+  sexp_gc_preserve4(ctx, ref, value, cell, op);
   if (! (sexp_pairp(sexp_cdr(x)) && sexp_pairp(sexp_cddr(x))
          && sexp_nullp(sexp_cdddr(x)) && sexp_idp(sexp_cadr(x)))) {
     res = sexp_compile_error(ctx, "bad set! syntax", x);
   } else {
-    ref = analyze_var_ref(ctx, sexp_cadr(x), &varenv);
-    if (sexp_lambdap(sexp_ref_loc(ref)))
-      sexp_insert(ctx, sexp_lambda_sv(sexp_ref_loc(ref)), sexp_ref_name(ref));
-    value = analyze(ctx, sexp_caddr(x), depth, 0);
-    if (sexp_exceptionp(ref)) {
-      res = ref;
-    } else if (sexp_exceptionp(value)) {
-      res = value;
-    } else if (sexp_immutablep(sexp_ref_cell(ref))
-               || (varenv && sexp_immutablep(varenv))) {
-      res = sexp_compile_error(ctx, "immutable binding", sexp_cadr(x));
+    cell = sexp_env_cell(ctx, sexp_context_env(ctx), sexp_cadr(x), 0);
+    op = cell ? sexp_cdr(cell) : NULL;
+    if (op && sexp_macrop(op)) {
+      if (!sexp_procedure_variable_transformer_p(sexp_macro_proc(op))) {
+        res = sexp_compile_error(ctx, "can't mutate a syntax keyword", sexp_cadr(x));
+      } else {
+        res = analyze_macro_once(ctx, x, op, depth);
+      }
     } else {
-      res = sexp_make_set(ctx, ref, value);
-      sexp_set_source(res) = sexp_pair_source(x);
+      ref = analyze_var_ref(ctx, sexp_cadr(x), &varenv);
+      if (sexp_refp(ref) && sexp_lambdap(sexp_ref_loc(ref)))
+        sexp_insert(ctx, sexp_lambda_sv(sexp_ref_loc(ref)), sexp_ref_name(ref));
+      value = analyze(ctx, sexp_caddr(x), depth, 0);
+      if (sexp_exceptionp(ref)) {
+        res = ref;
+      } else if (sexp_exceptionp(value)) {
+        res = value;
+      } else if (sexp_immutablep(sexp_ref_cell(ref))
+                 || (varenv && sexp_immutablep(varenv))) {
+        res = sexp_compile_error(ctx, "immutable binding", sexp_cadr(x));
+      } else {
+        res = sexp_make_set(ctx, ref, value);
+        sexp_set_source(res) = sexp_pair_source(x);
+      }
     }
   }
-  sexp_gc_release2(ctx);
+  sexp_gc_release4(ctx);
   return res;
 }
 
@@ -889,11 +933,18 @@ static sexp analyze_if (sexp ctx, sexp x, int depth) {
     res = sexp_compile_error(ctx, "too many args to if", x);
   } else {
     test = analyze(ctx, sexp_cadr(x), depth, 0);
-    pass = analyze(ctx, sexp_caddr(x), depth, 0);
-    fail_expr = sexp_pairp(sexp_cdddr(x)) ? sexp_cadddr(x) : SEXP_VOID;
-    fail = analyze(ctx, fail_expr, depth, 0);
-    res = (sexp_exceptionp(test) ? test : sexp_exceptionp(pass) ? pass :
-           sexp_exceptionp(fail) ? fail : sexp_make_cnd(ctx, test, pass, fail));
+    if (sexp_exceptionp(test)) {
+      res = test;
+    } else {
+      pass = analyze(ctx, sexp_caddr(x), depth, 0);
+      if (sexp_exceptionp(pass)) {
+        res = pass;
+      } else {
+        fail_expr = sexp_pairp(sexp_cdddr(x)) ? sexp_cadddr(x) : SEXP_VOID;
+        fail = analyze(ctx, fail_expr, depth, 0);
+        res = sexp_exceptionp(fail) ? fail : sexp_make_cnd(ctx, test, pass, fail);
+      }
+    }
     if (sexp_cndp(res)) sexp_cnd_source(res) = sexp_pair_source(x);
   }
   sexp_gc_release3(ctx);
@@ -1011,7 +1062,7 @@ static sexp analyze_let_syntax_aux (sexp ctx, sexp x, int recp, int depth) {
     sexp_env_syntactic_p(env) = 1;
     sexp_env_parent(env) = sexp_context_env(ctx);
     sexp_env_bindings(env) = SEXP_NULL;
-#if SEXP_USE_RENAME_BINDINGS
+#if SEXP_USE_STABLE_ABI || SEXP_USE_RENAME_BINDINGS
     sexp_env_renames(env) = SEXP_NULL;
 #endif
     ctx2 = sexp_make_child_context(ctx, sexp_context_lambda(ctx));
@@ -1051,8 +1102,13 @@ static sexp analyze (sexp ctx, sexp object, int depth, int defok) {
     } else if (sexp_idp(sexp_car(x))) {
       if (! cell) {
         res = analyze_app(ctx, x, depth);
-        if (sexp_exceptionp(res))
+        if (sexp_exceptionp(res)) {
           sexp_warn(ctx, "exception inside undefined operator: ", sexp_car(x));
+          /* the common case of no imports */
+          if (!sexp_env_parent(sexp_context_env(ctx))) {
+            sexp_warn(ctx, "did you forget to import a language? e.g. (import (scheme base))", SEXP_UNDEF);
+          }
+        }
       } else {
         op = sexp_cdr(cell);
         if (sexp_corep(op)) {
@@ -1064,7 +1120,12 @@ static sexp analyze (sexp ctx, sexp object, int depth, int defok) {
               : sexp_compile_error(ctx, "unexpected define", x);
             break;
           case SEXP_CORE_SET:
-            res = analyze_set(ctx, x, depth); break;
+            x = analyze_set(ctx, x, depth);
+            if (!sexp_exceptionp(x) && !sexp_setp(x))
+              goto loop;
+            else
+              res = x;
+            break;
           case SEXP_CORE_LAMBDA:
             res = analyze_lambda(ctx, x, depth); break;
           case SEXP_CORE_IF:
@@ -1095,14 +1156,7 @@ static sexp analyze (sexp ctx, sexp object, int depth, int defok) {
             res = sexp_compile_error(ctx, "unknown core form", op); break;
           }
         } else if (sexp_macrop(op)) {
-          tmp = sexp_cons(ctx, sexp_macro_env(op), SEXP_NULL);
-          tmp = sexp_cons(ctx, sexp_context_env(ctx), tmp);
-          tmp = sexp_cons(ctx, x, tmp);
-          x = sexp_exceptionp(tmp) ? tmp : sexp_make_child_context(ctx, sexp_context_lambda(ctx));
-          if (!sexp_exceptionp(x) && !sexp_exceptionp(sexp_context_exception(ctx)))
-            x = sexp_apply(x, sexp_macro_proc(op), tmp);
-          if (sexp_exceptionp(x) && sexp_not(sexp_exception_source(x)))
-            sexp_exception_source(x) = sexp_pair_source(sexp_car(tmp));
+          x = analyze_macro_once(ctx, x, op, depth);
           goto loop;
         } else if (sexp_opcodep(op)) {
           res = sexp_length(ctx, sexp_cdr(x));
@@ -1134,7 +1188,14 @@ static sexp analyze (sexp ctx, sexp object, int depth, int defok) {
         sexp_warn(ctx, "invalid operator in application: ", x);
     }
   } else if (sexp_idp(x)) {
-    res = analyze_var_ref(ctx, x, NULL);
+    cell = sexp_env_cell(ctx, sexp_context_env(ctx), x, 0);
+    op = cell ? sexp_cdr(cell) : NULL;
+    if (op && sexp_macrop(op)) {
+      x = analyze_macro_once(ctx, x, op, depth);
+      goto loop;
+    } else {
+      res = analyze_var_ref(ctx, x, NULL);
+    }
   } else if (sexp_synclop(x)) {
     tmp = sexp_make_child_context(ctx, sexp_context_lambda(ctx));
     if (sexp_pairp(sexp_synclo_free_vars(x))) {
@@ -1319,24 +1380,53 @@ sexp sexp_stream_portp_op (sexp ctx, sexp self, sexp_sint_t n, sexp port) {
 #endif
 
 #if SEXP_USE_STATIC_LIBS
-#if SEXP_USE_STATIC_LIBS_NO_INCLUDE
+#if SEXP_USE_STATIC_LIBS_EMPTY
+struct sexp_library_entry_t* sexp_static_libraries = NULL;
+#elif SEXP_USE_STATIC_LIBS_NO_INCLUDE
 extern struct sexp_library_entry_t* sexp_static_libraries;
 #else
 #include "clibs.c"
 #endif
+
+void sexp_add_static_libraries(struct sexp_library_entry_t* libraries)
+{
+  struct sexp_library_entry_t *entry, *table;
+
+  if (!sexp_static_libraries) {
+    sexp_static_libraries = libraries;
+    return;
+  }
+
+  for (table = sexp_static_libraries; ;
+       table = (struct sexp_library_entry_t*)entry->init) {
+    for (entry = &table[0]; entry->name; entry++)
+       ;
+    if (!entry->init) {
+      entry->init = (sexp_init_proc)libraries;
+      return;
+    }
+  }
+}
+
 static struct sexp_library_entry_t *sexp_find_static_library(const char *file)
 {
   size_t base_len;
-  struct sexp_library_entry_t *entry;
+  struct sexp_library_entry_t *entry, *table;
 
+  if(!sexp_static_libraries)
+    return NULL;
   if (file[0] == '.' && file[1] == '/')
     file += 2;
   base_len = strlen(file) - strlen(sexp_so_extension);
   if (strcmp(file + base_len, sexp_so_extension))
     return NULL;
-  for (entry = &sexp_static_libraries[0]; entry->name; entry++)
-    if (! strncmp(file, entry->name, base_len))
-      return entry;
+  for (table = sexp_static_libraries;
+       table;
+       table = (struct sexp_library_entry_t*)entry->init) {
+    for (entry = &table[0]; entry->name; entry++)
+      if (! strncmp(file, entry->name, base_len))
+        return entry;
+  }
   return NULL;
 }
 #else
@@ -1612,8 +1702,8 @@ sexp sexp_inexact_sqrt (sexp ctx, sexp self, sexp_sint_t n, sexp z) {
   if (sexp_flonump(z))
     d = sexp_flonum_value(z);
   else if (sexp_fixnump(z))
-    d = (double)sexp_unbox_fixnum(z);
-  maybe_convert_ratio(ctx, z)        /* XXXX add ratio sqrt */
+    d = (double)sexp_unbox_fixnum(z); /* may be larger or smaller than z */
+  maybe_convert_ratio(ctx, z)         /* TODO: add ratio sqrt */
   maybe_convert_complex(z, sexp_complex_sqrt)
   else
     return sexp_type_exception(ctx, self, SEXP_NUMBER, z);
@@ -1653,6 +1743,11 @@ sexp sexp_exact_sqrt (sexp ctx, sexp self, sexp_sint_t n, sexp z) {
     if (!sexp_exceptionp(res)) {
       rem = sexp_mul(ctx, res, res);
       rem = sexp_sub(ctx, z, rem);
+      if (sexp_negativep(rem)) {
+        res = sexp_sub(ctx, res, SEXP_ONE);
+        rem = sexp_mul(ctx, res, res);
+        rem = sexp_sub(ctx, z, rem);
+      }
       res = sexp_cons(ctx, res, rem);
     }
   }
@@ -1852,8 +1947,8 @@ sexp sexp_inexact_to_exact (sexp ctx, sexp self, sexp_sint_t n, sexp z) {
       res = sexp_xtype_exception(ctx, self, "exact: not an integer", z);
 #endif
 #if SEXP_USE_BIGNUMS
-    } else if ((sexp_flonum_value(z) > SEXP_MAX_FIXNUM)
-               || sexp_flonum_value(z) < SEXP_MIN_FIXNUM) {
+    } else if ((sexp_flonum_value(z) > (double)SEXP_MAX_FIXNUM)
+               || sexp_flonum_value(z) < (double)SEXP_MIN_FIXNUM) {
       res = sexp_double_to_bignum(ctx, sexp_flonum_value(z));
 #endif
     } else {
@@ -1952,7 +2047,7 @@ void sexp_string_utf8_set (sexp ctx, sexp str, sexp index, sexp ch) {
   p = (unsigned char*)sexp_string_data(str) + i;
   old_len = sexp_utf8_initial_byte_count(*p);
   new_len = sexp_utf8_char_byte_count(c);
-  if (old_len != new_len) { /* resize bytes if needed */
+  if (sexp_copy_on_writep(str) || old_len != new_len) { /* resize bytes if needed */
     len = sexp_string_size(str)+(new_len-old_len);
     b = sexp_make_bytes(ctx, sexp_make_fixnum(len), SEXP_VOID);
     if (! sexp_exceptionp(b)) {
@@ -1963,10 +2058,17 @@ void sexp_string_utf8_set (sexp ctx, sexp str, sexp index, sexp ch) {
       p = q + i;
     }
     sexp_string_size(str) += new_len - old_len;
+    sexp_copy_on_writep(str) = 0;
   }
   sexp_utf8_encode_char(p, new_len, c);
-  if (old_len != new_len)
+  if (old_len != new_len) {
+#if SEXP_USE_STRING_INDEX_TABLE
     sexp_update_string_index_lookup(ctx, str);
+#elif SEXP_USE_STRING_REF_CACHE
+  sexp_cached_char_idx(str) = 0;
+  sexp_cached_cursor(str) = sexp_make_string_cursor(0);
+#endif
+  }
 }
 
 sexp sexp_string_utf8_index_set (sexp ctx, sexp self, sexp_sint_t n, sexp str, sexp i, sexp ch) {
@@ -1974,6 +2076,8 @@ sexp sexp_string_utf8_index_set (sexp ctx, sexp self, sexp_sint_t n, sexp str, s
   sexp_assert_type(ctx, sexp_stringp, SEXP_STRING, str);
   sexp_assert_type(ctx, sexp_fixnump, SEXP_FIXNUM, i);
   sexp_assert_type(ctx, sexp_charp, SEXP_CHAR, ch);
+  if (sexp_immutablep(str))
+    return sexp_xtype_exception(ctx, self, "string-set!: immutable string", str);
   off = sexp_string_index_to_cursor(ctx, self, n, str, i);
   if (sexp_exceptionp(off)) return off;
   if (sexp_unbox_string_cursor(off) >= (sexp_sint_t)sexp_string_size(str))
@@ -2188,9 +2292,9 @@ static struct sexp_core_form_struct core_forms[] = {
   {SEXP_CORE_BEGIN, (sexp)"begin"},
   {SEXP_CORE_QUOTE, (sexp)"quote"},
   {SEXP_CORE_SYNTAX_QUOTE, (sexp)"syntax-quote"},
-  {SEXP_CORE_DEFINE_SYNTAX, (sexp)"%define-syntax"},
-  {SEXP_CORE_LET_SYNTAX, (sexp)"%let-syntax"},
-  {SEXP_CORE_LETREC_SYNTAX, (sexp)"%letrec-syntax"},
+  {SEXP_CORE_DEFINE_SYNTAX, (sexp)"define-syntax"},
+  {SEXP_CORE_LET_SYNTAX, (sexp)"let-syntax"},
+  {SEXP_CORE_LETREC_SYNTAX, (sexp)"letrec-syntax"},
 };
 
 sexp sexp_make_env_op (sexp ctx, sexp self, sexp_sint_t n) {
@@ -2198,7 +2302,7 @@ sexp sexp_make_env_op (sexp ctx, sexp self, sexp_sint_t n) {
   sexp_env_lambda(e) = NULL;
   sexp_env_parent(e) = NULL;
   sexp_env_bindings(e) = SEXP_NULL;
-#if SEXP_USE_RENAME_BINDINGS
+#if SEXP_USE_STABLE_ABI || SEXP_USE_RENAME_BINDINGS
   sexp_env_renames(e) = SEXP_NULL;
 #endif
   return e;
@@ -2481,8 +2585,17 @@ sexp sexp_make_standard_env_op (sexp ctx, sexp self, sexp_sint_t n, sexp version
   sexp_gc_preserve1(ctx, env);
   env = sexp_make_primitive_env(ctx, version);
   if (! sexp_exceptionp(env)) env = sexp_load_standard_env(ctx, env, SEXP_SEVEN);
+  if (sexp_envp(env)) sexp_immutablep(env) = 1;
   sexp_gc_release1(ctx);
   return env;
+}
+
+sexp sexp_make_immutable_op (sexp ctx, sexp self, sexp_sint_t n, sexp x) {
+  if (sexp_pointerp(x)) {
+    sexp_immutablep(x) = 1;
+    return SEXP_TRUE;
+  }
+  return SEXP_FALSE;
 }
 
 sexp sexp_env_parent_op (sexp ctx, sexp self, sexp_sint_t n, sexp e) {

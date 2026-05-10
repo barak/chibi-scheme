@@ -1,12 +1,19 @@
 ;; app.scm -- unified option parsing and config
-;; Copyright (c) 2012-2015 Alex Shinn.  All rights reserved.
+;; Copyright (c) 2012-2024 Alex Shinn.  All rights reserved.
 ;; BSD-style license: http://synthcode.com/license.txt
 
-;;> The high-level interface.  Given an application spec \var{spec},
-;;> parses the given command-line arguments \var{args} into a config
-;;> object, prepended to the existing object \var{config} if given.
-;;> Then runs the corresponding command (or sub-command) procedure
-;;> from \var{spec}.
+;;> The high-level interface.  Parses a command-line with optional
+;;> and/or positional arguments, with arbitrarily nested subcommands
+;;> (optionally having their own arguments), and calls the
+;;> corresponding main procedure on the parsed config.
+;;>
+;;> Given an application spec \var{spec}, parses the given
+;;> command-line arguments \var{args} into a config object (from
+;;> \scheme{(chibi config)}), prepended to the existing object
+;;> \var{config} if given.  Then runs the corresponding command (or
+;;> sub-command) procedure from \var{spec} on the following arguments:
+;;>
+;;> \scheme{(<proc> <config> <spec> <positional args> ...)}
 ;;>
 ;;> The app spec should be a list of the form:
 ;;>
@@ -18,6 +25,7 @@
 ;;> \item{\scheme{(@ <opt-spec>)} - option spec, described below}
 ;;> \item{\scheme{(begin: <begin-proc>)} - procedure to run before main}
 ;;> \item{\scheme{(end: <end-proc>)} - procedure to run after main}
+;;> \item{\scheme{(types: (<type-name> <parser>) ...)} - additional types that can be used in argument parsing}
 ;;> \item{\scheme{(<proc> args ...)} - main procedure (args only for documentation)}
 ;;> \item{\scheme{<app-spec>} - a subcommand described by the nested spec}
 ;;> \item{\scheme{(or <app-spec> ...)} - an alternate list of subcommands}
@@ -55,7 +63,43 @@
 ;;> files, whereas the app specs include embedded procedure objects so
 ;;> are typically written with \scheme{quasiquote}.
 ;;>
-;;> Complete Example:
+;;> Complete Example - stripped down ls(1):
+;;>
+;;> \schemeblock{
+;;> (import (scheme base)
+;;>         (scheme process-context)
+;;>         (scheme write)
+;;>         (srfi 130)
+;;>         (chibi app)
+;;>         (chibi config)
+;;>         (chibi filesystem))
+;;>
+;;> (define (ls cfg spec . files)
+;;>   (for-each
+;;>     (lambda (x)
+;;>       (for-each
+;;>         (lambda (file)
+;;>           (unless (and (string-prefix? "." file)
+;;>                        (not (conf-get cfg 'all)))
+;;>             (write-string file)
+;;>             (when (conf-get cfg 'long)
+;;>               (write-string " ")
+;;>               (write (file-modification-time file)))
+;;>             (newline)))
+;;>         (if (file-directory? x) (directory-files x) (list x))))
+;;>     files))
+;;>
+;;> (run-application
+;;>   `(ls
+;;>     "list directory contents"
+;;>     (@
+;;>      (long boolean (#\\l) "use a long listing format")
+;;>      (all boolean (#\\a) "do not ignore entries starting with ."))
+;;>     (,ls files ...))
+;;>   (command-line))
+;;> }
+;;>
+;;> Subcommand Skeleton Example:
 ;;>
 ;;> \schemeblock{
 ;;> (run-application
@@ -63,7 +107,7 @@
 ;;>     "Zookeeper Application"
 ;;>     (@
 ;;>      (animals (list symbol) "list of animals to act on (default all)")
-;;>      (lions boolean (#\l) "also apply the action to lions"))
+;;>      (lions boolean (#\\l) "also apply the action to lions"))
 ;;>     (or
 ;;>      (feed "feed the animals" () (,feed animals ...))
 ;;>      (wash "wash the animals" (@ (soap boolean)) (,wash animals ...))
@@ -125,7 +169,7 @@
   (let ((args (or (and (pair? o) (car o)) (command-line)))
         (config (and (pair? o) (pair? (cdr o)) (cadr o))))
     (cond
-     ((parse-app '() (cdr spec) '() (cdr args) config #f #f)
+     ((parse-app '() (cdr spec) '() (cdr args) config #f #f '())
       => (lambda (v)
            (let ((proc (vector-ref v 0))
                  (cfg (vector-ref v 1))
@@ -150,7 +194,7 @@
 ;;> \var{fail} with a single string argument describing the error,
 ;;> returning that result.
 
-(define (parse-option prefix conf-spec args fail)
+(define (parse-option prefix conf-spec args types fail)
   (define (parse-value type str)
     (cond
      ((not (string? str))
@@ -187,7 +231,10 @@
                    res))
                #f))
         (else
-         (list str #f))))))
+         (cond
+          ((assq type types)
+           => (lambda (cell) (list ((cadr cell) str) #f)))
+          (else (list str #f))))))))
   (define (lookup-conf-spec conf-spec syms strs)
     (let ((sym (car syms))
           (str (car strs)))
@@ -302,7 +349,7 @@
 ;;> is the list of remaining non-option arguments.  Calls fail on
 ;;> error and tries to continue processing from the result.
 
-(define (parse-options prefix conf-spec orig-args fail)
+(define (parse-options prefix conf-spec orig-args types fail)
   (let lp ((args orig-args)
            (opts (make-conf '() #f (cons 'options orig-args) #f)))
     (cond
@@ -312,9 +359,23 @@
           (not (eqv? #\- (string-ref (car args) 0))))
       (cons opts (if (equal? (car args) "--") (cdr args) args)))
      (else
-      (let ((val+args (parse-option prefix conf-spec args fail)))
+      (let ((val+args (parse-option prefix conf-spec args types fail)))
         (lp (cdr val+args)
             (conf-set opts (caar val+args) (cdar val+args))))))))
+
+(define (get-options-tail options-spec)
+  (unless (and (pair? options-spec) (eq? '@ (car options-spec)))
+    (error "not an options spec" options-spec))
+  (let ((tail (cdr options-spec)))
+    ;; to be safe, support both (@ ,spec) and (@ ,@spec)
+    (cond
+     ((not (pair? tail))
+      '())
+     ((or (pair? (cdr tail))
+          (and (pair? (car tail)) (symbol? (caar tail))))
+      tail)
+     (else
+      (car tail)))))
 
 ;;> Parses a list of command-line arguments \var{args} according to
 ;;> the application spec \var{opt-spec}.  Returns a vector of five
@@ -332,7 +393,7 @@
 ;;> all prefixed by \var{prefix}.  The original \var{spec} is used for
 ;;> \scheme{app-help}.
 
-(define (parse-app prefix spec opt-spec args config init end . o)
+(define (parse-app prefix spec opt-spec args config init end types . o)
   (define (next-prefix prefix name)
     (append (if (null? prefix) '(command) prefix) (list name)))
   (define (prev-prefix prefix)
@@ -367,54 +428,48 @@
      ((null? spec)
       (error "no procedure in application spec"))
      ((or (null? (car spec)) (equal? '(@) (car spec)))
-      (parse-app prefix (cdr spec) opt-spec args config init end fail))
+      (parse-app prefix (cdr spec) opt-spec args config init end types fail))
      ((pair? (car spec))
       (case (caar spec)
         ((@)
-         (let* ((tail (cdar spec))
-                (new-opt-spec
-                 (cond
-                  ((not (pair? tail))
-                   '())
-                  ((or (pair? (cdr tail))
-                       (and (pair? (car tail)) (symbol? (caar tail))))
-                   tail)
-                  (else
-                   (car tail))))
+         (let* ((new-opt-spec (get-options-tail (car spec)))
                 (new-fail
                  (lambda (new-prefix new-spec new-opt new-args reason)
-                   (parse-option (prev-prefix prefix) opt-spec new-args fail)))
-                (cfg+args (parse-options prefix new-opt-spec args new-fail))
+                   (parse-option (prev-prefix prefix) opt-spec new-args types fail)))
+                (cfg+args (parse-options prefix new-opt-spec args types new-fail))
                 (config (conf-append (car cfg+args) config))
                 (args (cdr cfg+args)))
            (parse-app prefix (cdr spec) new-opt-spec args config
-                      init end new-fail)))
+                      init end types new-fail)))
         ((or)
-         (any (lambda (x) (parse-app prefix x opt-spec args config init end))
+         (any (lambda (x) (parse-app prefix x opt-spec args config init end types))
               (cdar spec)))
         ((begin:)
          (parse-app prefix (cdr spec) opt-spec args config
-                    (cadr (car spec)) end fail))
+                    (cadr (car spec)) end types fail))
         ((end:)
          (parse-app prefix (cdr spec) opt-spec args config
-                    init (cadr (car spec)) fail))
+                    init (cadr (car spec)) types fail))
+        ((types:)
+         (parse-app prefix (cdr spec) opt-spec args config
+                    init end (cdr (car spec)) fail))
         (else
          (if (procedure? (caar spec))
              (vector (caar spec) config args init end) ; TODO: verify
              (parse-app prefix (car spec) opt-spec args config
-                        init end fail)))))
+                        init end types fail)))))
      ((symbol? (car spec))
       (and (pair? args)
            (eq? (car spec) (string->symbol (car args)))
            (let ((prefix (next-prefix prefix (car spec))))
              (parse-app prefix (cdr spec) opt-spec (cdr args) config
-                        init end fail))))
+                        init end types fail))))
      ((procedure? (car spec))
       (vector (car spec) config args init end))
      (else
       (if (not (string? (car spec)))
           (error "unknown application spec" (car spec)))
-      (parse-app prefix (cdr spec) opt-spec args config init end fail)))))
+      (parse-app prefix (cdr spec) opt-spec args config init end types fail)))))
 
 (define (print-command-help command out)
   (cond
@@ -488,7 +543,7 @@
             (and (pair? (car ls)) (memq (caar ls) '(begin: end:) )))
         (lp (cdr ls) (car ls) commands options))
        ((and (pair? (car ls)) (eq? '@ (caar ls)))
-        (lp (cdr ls) docs commands (append options (cadr (car ls)))))
+        (lp (cdr ls) docs commands (append options (get-options-tail (car ls)))))
        ((and (pair? (car ls)) (symbol? (caar ls)))
         ;; don't print nested commands
         (if (pair? commands)
@@ -504,4 +559,5 @@
 ;;> \schemeblock{(help "print help" (,app-help-command args ...))}
 
 (define (app-help-command config spec . args)
+  ;; TODO: subcommand help
   (app-help spec args (current-output-port)))

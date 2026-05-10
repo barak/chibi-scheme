@@ -1,33 +1,35 @@
-#
-# FIXME: This CMakeLists.txt is only for Win32 platforms for now
-#
 
-cmake_minimum_required(VERSION 2.8.7)
-project(chibi-scheme)
+cmake_minimum_required(VERSION 3.16)
 
-include(CheckIncludeFile)
+if(CMAKE_VERSION VERSION_GREATER_EQUAL "3.24")
+    # Don't set compiler environment variables on first run, as this can break
+    # generation of chibi-scheme-bootstrap when cross-compiling
+    cmake_policy(SET CMP0132 NEW)
+endif()
 
-#
-# Version setting
-#
+file(READ ${CMAKE_CURRENT_SOURCE_DIR}/VERSION version)
+string(STRIP ${version} version)
 
 file(READ ${CMAKE_CURRENT_SOURCE_DIR}/RELEASE release)
 string(STRIP ${release} release)
 
-file(READ ${CMAKE_CURRENT_SOURCE_DIR}/VERSION rawversion)
-string(STRIP ${rawversion} rawversion)
-set(version "${rawversion}-cmake")
+project(chibi-scheme LANGUAGES C VERSION ${version}
+    DESCRIPTION "Chibi-Scheme: minimal r7rs implementation, release: ${release}")
 
-set(chibischemelib "chibi-scheme-${rawversion}")
+include(CheckIncludeFile)
+include(CheckLibraryExists)
+include(CheckSymbolExists)
+include(GNUInstallDirs)
+include(CMakePackageConfigHelpers)
 
-if(APPLE)
-    message(FATAL_ERROR 
-        "DYLD platforms are not supported with this CMakeLists.txt. Use Makefile instead.")
-endif()
+set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
-if(UNIX)
-    message(FATAL_ERROR 
-        "UNIX platforms are not supported with this CMakeLists.txt. Use Makefile instead.")
+set(CMAKE_BUILD_TYPE "${CMAKE_BUILD_TYPE}" CACHE STRING
+    "Build type: None, Debug, Release, RelWithDebInfo, MinSizeRel, or Sanitizer." FORCE)
+
+if (NOT EXISTS ${CMAKE_BINARY_DIR}/CMakeCache.txt AND NOT CMAKE_BUILD_TYPE)
+    # CMake doesn't have a default build type, so set one manually
+    set(CMAKE_BUILD_TYPE "RelWithDebInfo" CACHE STRING "" FORCE)
 endif()
 
 #
@@ -35,33 +37,37 @@ endif()
 #
 
 check_include_file(poll.h HAVE_POLL_H)
-check_include_file(stdint.h HAVE_STDINT_H)
-# option(CHIBI_SCHEME_USE_DL "Use dynamic loading" ON)
-set(CHIBI_SCHEME_USE_DL OFF)
-option(CHIBI_SCHEME_SHARED "Build chibi-scheme as a shared library" ON)
+check_symbol_exists(ntp_gettime sys/timex.h HAVE_NTP_GETTIME)
+check_symbol_exists(int_least8_t inttypes.h HAVE_STDINT_H)
+check_library_exists(util openpty "" HAVE_LIBRARY_UTIL)
 
-if(NOT CHIBI_SCHEME_SHARED)
-    add_definitions(-DSEXP_STATIC_LIBRARY=1)
+if((NOT BSD) AND (CMAKE_SYSTEM MATCHES "[Bb][Ss][Dd]"))
+    set(BSD 1)
+elseif((NOT LINUX) AND (CMAKE_SYSTEM MATCHES "[Ll]inux"))
+    set(LINUX 1)
+elseif((NOT EMSCRIPTEN) AND (CMAKE_SYSTEM MATCHES "[Ee]mscripten"))
+    set(EMSCRIPTEN 1)
 endif()
 
-if(CHIBI_SCHEME_USE_DL)
-    add_definitions(-DSEXP_USE_DL=1)
+if ((WIN32 AND NOT CYGWIN) OR EMSCRIPTEN)
+    set(DEFAULT_SHARED_LIBS OFF)
 else()
-    add_definitions(-DSEXP_USE_DL=0)
+    set(DEFAULT_SHARED_LIBS ON)
 endif()
 
-if(HAVE_STDINT_H)
-    add_definitions(-DSEXP_USE_INTTYPES=1)
+option(BUILD_SHARED_LIBS "Build chibi-scheme as a shared library" ${DEFAULT_SHARED_LIBS})
+option(SEXP_USE_BOEHM "Use Boehm garbage collection library" OFF)
+if(EMSCRIPTEN)
+    option(EMBED_MODULES "Embed all modules in chibi-scheme.js" ON)
 endif()
 
-if(NOT HAVE_POLL_H)
-    # Disable green threads: It depends on non-blocking I/O
-    add_definitions(-DSEXP_USE_GREEN_THREADS=0)
+if(SEXP_USE_BOEHM)
+    find_library(BOEHMGC gc REQUIRED)
+    find_path(BOEHMGC_INCLUDE NAMES gc/gc.h)
 endif()
 
 set(chibi-scheme-exclude-modules)
 if(WIN32)
-    add_definitions(-DBUILDING_DLL)
     set(chibi-scheme-exclude-modules
         # Following modules are not compatible with Win32
         lib/chibi/net.sld
@@ -71,6 +77,48 @@ if(WIN32)
         lib/chibi/time.sld
         lib/chibi/pty.sld)
 endif()
+
+#
+# Default settings for all targets. We use an interface library here to not
+# pollute/mutate global settings. Any configuration applied to this library
+# is propagated to its client targets.
+#
+
+add_library(libchibi-common
+    INTERFACE)
+
+target_compile_definitions(libchibi-common
+    INTERFACE
+    SEXP_STATIC_LIBRARY=$<NOT:$<BOOL:${BUILD_SHARED_LIBS}>>
+    SEXP_USE_DL=$<BOOL:${BUILD_SHARED_LIBS}>
+    $<$<PLATFORM_ID:Windows>:BUILDING_DLL=$<BOOL:${BUILD_SHARED_LIBS}>>
+    SEXP_USE_INTTYPES=$<BOOL:${HAVE_STDINT_H}>
+    SEXP_USE_NTPGETTIME=$<BOOL:${HAVE_NTP_GETTIME}>
+    $<$<NOT:$<BOOL:${HAVE_POLL_H}>>:SEXP_USE_GREEN_THREADS=0>
+    $<$<PLATFORM_ID:Windows>:SEXP_USE_STRING_STREAMS=0>
+    $<$<BOOL:${SEXP_USE_BOEHM}>:SEXP_USE_BOEHM=1>)
+
+target_compile_options(libchibi-common
+    INTERFACE
+    $<$<C_COMPILER_ID:GNU>:-Wall>
+    $<$<OR:$<C_COMPILER_ID:AppleClang>,$<C_COMPILER_ID:Clang>>:-Wall>
+    $<$<CONFIG:SANITIZER>:-g
+    -fsanitize=address,undefined,integer,float-divide-by-zero,float-cast-overflow,return
+    -fno-omit-frame-pointer>)
+
+target_include_directories(libchibi-common
+    INTERFACE
+    ${BOEHMGC_INCLUDE}
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_BINARY_DIR}/include>
+    $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>)
+
+target_link_libraries(libchibi-common INTERFACE
+    ${BOEHMGC}
+    $<$<CONFIG:SANITIZER>:-fsanitize=address,undefined>
+    $<$<PLATFORM_ID:Windows>:ws2_32>
+    $<$<AND:$<PLATFORM_ID:Linux>,$<BOOL:${BUILD_SHARED_LIBS}>>:${CMAKE_DL_LIBS}>
+    $<$<PLATFORM_ID:Linux>:m>)
 
 #
 # Sources
@@ -89,170 +137,375 @@ set(chibi-scheme-srcs
     eval.c
     simplify.c)
 
-include_directories(
-    include
-    ${CMAKE_CURRENT_BINARY_DIR}/include)
-
 #
 # Bootstrap
 #
 
-add_executable(chibi-scheme-bootstrap
-    ${chibi-scheme-srcs}
-    main.c)
+if(NOT CMAKE_CROSSCOMPILING)
+    add_executable(chibi-scheme-bootstrap
+        EXCLUDE_FROM_ALL
+        ${chibi-scheme-srcs}
+        main.c)
 
-if(WIN32)
-    target_link_libraries(chibi-scheme-bootstrap ws2_32)
-endif()
+    target_link_libraries(chibi-scheme-bootstrap PRIVATE libchibi-common)
 
-if(CYGWIN OR WIN32)
-    set(soext ".dll")
+    export(TARGETS chibi-scheme-bootstrap
+        FILE "${CMAKE_CURRENT_BINARY_DIR}/chibi-scheme-bootstrap-config.cmake")
 else()
-    set(soext ".so")
+    #
+    # When cross-compiling, we need to build chibi-scheme-bootstrap for the
+    # host system
+    #
+
+    set(bootstrap-build-dir "${CMAKE_CURRENT_BINARY_DIR}/bootstrap-build")
+
+    execute_process(
+        COMMAND "${CMAKE_COMMAND}"
+            -B "${bootstrap-build-dir}"
+            -S "${CMAKE_CURRENT_SOURCE_DIR}"
+        COMMAND_ECHO STDERR
+        COMMAND_ERROR_IS_FATAL ANY)
+    execute_process(
+        COMMAND "${CMAKE_COMMAND}"
+            --build "${bootstrap-build-dir}"
+            --target chibi-scheme-bootstrap
+        COMMAND_ECHO STDERR
+        COMMAND_ERROR_IS_FATAL ANY)
+
+    include("${bootstrap-build-dir}/chibi-scheme-bootstrap-config.cmake")
 endif()
 
-#
-# Generate modules
-#
-
-# FIXME: Currently, it depends on GLOB thus we have to re-run CMake
-#        when we've gotten additional/removed library 
-
-file(GLOB_RECURSE stubs RELATIVE ${CMAKE_CURRENT_SOURCE_DIR}/lib 
-    ${CMAKE_CURRENT_SOURCE_DIR}/lib/*.stub)
-file(GLOB_RECURSE slds RELATIVE ${CMAKE_CURRENT_SOURCE_DIR} 
-    ${CMAKE_CURRENT_SOURCE_DIR}/lib/*.sld)
-list(REMOVE_ITEM slds ${chibi-scheme-exclude-modules})
-
-set(chibi-ffi ${CMAKE_CURRENT_SOURCE_DIR}/tools/chibi-ffi)
-set(chibi-genstatic ${CMAKE_CURRENT_SOURCE_DIR}/tools/chibi-genstatic)
-
-set(stuboutdir ${CMAKE_CURRENT_BINARY_DIR}/stubs/lib)
-foreach(e ${stubs})
-    get_filename_component(stubdir ${e} PATH)
-    get_filename_component(basename ${e} NAME_WE)
-    set(stubfile ${CMAKE_CURRENT_SOURCE_DIR}/lib/${e})
-    set(stubdir ${stuboutdir}/${stubdir})
-    set(stubout ${stubdir}/${basename}.c)
-    file(MAKE_DIRECTORY ${stubdir})
-    add_custom_command(OUTPUT ${stubout}
-        COMMAND chibi-scheme-bootstrap
-        ${chibi-ffi} ${stubfile} ${stubout}
-        DEPENDS ${stubfile} ${chibi-ffi}
-        WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})
-    list(APPEND stubouts ${stubout})
-endforeach()
-add_custom_target(chibi-scheme-stubs DEPENDS ${stubouts})
-
-#
-# Generate clib.c for SEXP_USE_STATIC_LIBS
-#
-
-string(REPLACE ";" "\n" genstatic-input "${slds}")
-set(clibin ${CMAKE_CURRENT_BINARY_DIR}/clib-in.txt)
-set(clibout ${CMAKE_CURRENT_BINARY_DIR}/clib.c)
-set(genstatic-helper 
-    ${CMAKE_CURRENT_LIST_DIR}/contrib/chibi-genstatic-helper.cmake)
-file(WRITE ${clibin} "${genstatic-input}")
-
-add_custom_command(OUTPUT ${clibout}
-    COMMAND 
-    ${CMAKE_COMMAND} 
-    -DEXEC=$<TARGET_FILE:chibi-scheme-bootstrap>
-    -DGENSTATIC=${chibi-genstatic}
-    -DSTUBS=${clibin}
-    -DOUT=${clibout}
-    -P ${genstatic-helper}
-    WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
-    DEPENDS 
-    chibi-scheme-bootstrap
-    ${chibi-genstatic}
-    ${genstatic-helper}
-    ${slds})
 
 #
 # Core library
 #
 
-if(CHIBI_SCHEME_SHARED)
-    set(libtype SHARED)
-else()
-    set(libtype STATIC)
+add_library(libchibi-scheme
+    ${chibi-scheme-srcs})
+
+target_link_libraries(libchibi-scheme
+    PUBLIC libchibi-common)
+
+set_target_properties(libchibi-scheme
+    PROPERTIES
+    PREFIX "" # It's liblibchibi-scheme otherwise
+    SOVERSION ${CMAKE_PROJECT_VERSION_MAJOR}
+    VERSION ${CMAKE_PROJECT_VERSION})
+
+
+#
+# Generate modules
+#
+
+file(GLOB_RECURSE slds RELATIVE ${CMAKE_CURRENT_SOURCE_DIR}
+    CONFIGURE_DEPENDS lib/*.sld)
+if (chibi-scheme-exclude-modules)
+    # CMake doesn't complain anymore about an empty 2nd argument, but 3.12 does. When we require a
+    # more recent version, the if-guard should go.
+    list(REMOVE_ITEM slds ${chibi-scheme-exclude-modules})
 endif()
 
-add_library(${chibischemelib} ${libtype}
-    ${chibi-scheme-srcs}
-    ${clibout})
+set(chibi-ffi ${CMAKE_CURRENT_SOURCE_DIR}/tools/chibi-ffi)
+set(chibi-genstatic ${CMAKE_CURRENT_SOURCE_DIR}/tools/chibi-genstatic)
 
-set_target_properties(${chibischemelib}
-    PROPERTIES 
-    COMPILE_DEFINITIONS "SEXP_USE_STATIC_LIBS=1")
+add_custom_target(chibi-compiled-libs)
 
-add_dependencies(${chibischemelib} chibi-scheme-stubs)
-
-if(WIN32 AND CHIBI_SCHEME_SHARED)
-    target_link_libraries(${chibischemelib} ws2_32)
-    target_compile_definitions(${chibischemelib} PUBLIC -DBUILDING_DLL=1)
-endif()
-
-function(bless_chibi_scheme_executable tgt)
-    target_link_libraries(${tgt} ${chibischemelib})
-    if(WIN32 AND NOT CHIBI_SCHEME_SHARED)
-        target_link_libraries(${tgt} ws2_32)
+function(add_compiled_library cfile)
+    if (NOT BUILD_SHARED_LIBS)
+        return()
     endif()
+
+    set(link-libraries LINK_LIBRARIES)
+    cmake_parse_arguments(compiledlib-options "" "" "${link-libraries}" ${ARGN})
+
+    get_filename_component(basename ${cfile} NAME_WE)
+    get_filename_component(libdir ${cfile} DIRECTORY)
+
+    if(NOT IS_ABSOLUTE ${libdir})
+        set(libdir ${CMAKE_CURRENT_BINARY_DIR}/${libdir})
+    endif()
+
+    file(RELATIVE_PATH libname ${CMAKE_CURRENT_BINARY_DIR} ${libdir}/${basename})
+    string(REPLACE "/" "-" libname ${libname})
+
+    add_library(${libname} ${cfile})
+    target_link_libraries(${libname} PRIVATE libchibi-scheme ${compiledlib-options_LINK_LIBRARIES})
+    add_dependencies(chibi-compiled-libs ${libname})
+
+    set_target_properties(${libname} PROPERTIES
+        LIBRARY_OUTPUT_DIRECTORY ${libdir}
+        LIBRARY_OUTPUT_NAME ${basename}
+        PREFIX "")
+
+    file(RELATIVE_PATH installsubdir ${CMAKE_CURRENT_BINARY_DIR}/lib ${libdir})
+    install(TARGETS ${libname}
+        LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}/chibi/${installsubdir})
 endfunction()
+
+if(BUILD_SHARED_LIBS AND NOT CMAKE_CROSSCOMPILING)
+    # This makes sure we only use the separate bootstrap executable for static
+    # builds. With dynamic linking, the default executable is fine. The dispatch
+    # is not a generator expression within the actual custom command to process
+    # the stubs, as older CMake versions fail to properly construct the dependency
+    # on the bootstrap executable from the generator expression.
+    set(bootstrap chibi-scheme)
+else()
+    set(bootstrap chibi-scheme-bootstrap)
+endif()
+
+if(WIN32)
+    set(platform "windows")
+elseif(CYGWIN)
+    set(platform "cygwin")
+elseif(APPLE)
+    set(platform "macosx")
+elseif(BSD)
+    set(platform "bsd")
+elseif(ANDROID)
+    set(platform "android")
+elseif(CMAKE_SYSTEM MATCHES "[Ss]un[Oo][Ss]")
+    set(platform "solaris")
+elseif (LINUX)
+    set(platform "linux")
+elseif (EMSCRIPTEN)
+    set(platform "emscripten")
+else()
+    set(platform "unix")
+endif()
+
+if(EMSCRIPTEN)
+    # Emscripten's toolchain file sets CMAKE_SYSTEM_PROCESSOR to "x86", which
+    # is neither accurate nor helpful as the value of sexp_platform
+    if(CMAKE_SIZEOF_VOID_P EQUAL 8)
+        set(architecture "wasm64")
+    else()
+        set(architecture "wasm32")
+    endif()
+else()
+    set(architecture "${CMAKE_SYSTEM_PROCESSOR}")
+endif()
+
+set(features "")
+
+if(CMAKE_CROSSCOMPILING)
+    #
+    # When cross-compiling, chibi-ffi and chibi-genstatic can't rely on the
+    # feature list built in to chibi-scheme-bootstrap, as it reports the
+    # features of the host, not the target.  Instead, we construct the list of
+    # relevant features ourselves and pass it to the tools via their
+    # --features option.
+    #
+
+    if(CMAKE_C_BYTE_ORDER STREQUAL "BIG_ENDIAN")
+        list(PREPEND features "big-endian")
+    else()
+        list(PREPEND features "little-endian")
+    endif()
+
+    list(PREPEND features ${platform} ${architecture})
+
+    if(APPLE)
+        list(PREPEND features "darwin" "bsd")
+    elseif(CMAKE_SYSTEM_NAME STREQUAL "OpenBSD")
+        list(PREPEND features "openbsd")
+    elseif(CMAKE_SYSTEM_NAME STREQUAL "FreeBSD")
+        list(PREPEND features "freebsd")
+    elseif(CMAKE_SYSTEM_NAME STREQUAL "NetBSD")
+        list(PREPEND features "netbsd")
+    elseif(CMAKE_SYSTEM_NAME STREQUAL "DragonFly")
+        list(PREPEND features "dragonfly")
+    endif()
+
+    if(HAVE_POLL_H)
+        list(PREPEND features "threads")
+    endif()
+
+    list(PREPEND features "chibi")
+endif()
+
+function(add_stubs_library stub)
+    set(link-libraries LINK_LIBRARIES)
+    cmake_parse_arguments(stubs-options "" "" "${link-libraries}" ${ARGN})
+
+    get_filename_component(stubdir ${stub} PATH)
+    get_filename_component(basename ${stub} NAME_WE)
+    set(stubfile ${CMAKE_CURRENT_SOURCE_DIR}/${stub})
+    set(stubdir ${CMAKE_CURRENT_BINARY_DIR}/${stubdir})
+    set(stubout ${stubdir}/${basename}.c)
+    set(stubouts ${stubouts} ${stubout} PARENT_SCOPE)
+    set(stublinkedlibs ${stublinkedlibs} ${stubs-options_LINK_LIBRARIES} PARENT_SCOPE)
+
+    file(MAKE_DIRECTORY ${stubdir})
+
+    add_custom_command(OUTPUT ${stubout}
+        COMMAND ${CMAKE_COMMAND}
+            -E env CHIBI_IGNORE_SYSTEM_PATH=1 CHIBI_MODULE_PATH=lib
+            $<TARGET_FILE:${bootstrap}> ${chibi-ffi}
+            "$<$<BOOL:${features}>:--features;$<JOIN:${features},$<COMMA>>>"
+            ${stubfile} ${stubout}
+        DEPENDS ${stubfile} ${chibi-ffi}
+        WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+        VERBATIM
+        COMMAND_EXPAND_LISTS)
+
+    add_compiled_library(${stubout} LINK_LIBRARIES ${stubs-options_LINK_LIBRARIES})
+endfunction()
+
+add_stubs_library(lib/chibi/crypto/crypto.stub)
+add_stubs_library(lib/chibi/emscripten.stub)
+add_stubs_library(lib/chibi/filesystem.stub)
+add_stubs_library(lib/chibi/io/io.stub)
+add_stubs_library(lib/scheme/bytevector.stub)
+add_stubs_library(lib/srfi/144/math.stub)
+add_stubs_library(lib/srfi/160/uvprims.stub)
+
+if(NOT WIN32)
+    add_stubs_library(lib/chibi/net.stub)
+    add_stubs_library(lib/chibi/process.stub)
+    if(HAVE_LIBRARY_UTIL)
+        add_stubs_library(lib/chibi/pty.stub LINK_LIBRARIES util)
+    else()
+        add_stubs_library(lib/chibi/pty.stub)
+    endif()
+    add_stubs_library(lib/chibi/stty.stub)
+    add_stubs_library(lib/chibi/system.stub)
+    add_stubs_library(lib/chibi/time.stub)
+else()
+    add_stubs_library(lib/chibi/win32/process-win32.stub)
+endif()
+
+add_custom_target(chibi-scheme-stubs DEPENDS ${stubouts})
+
+if (NOT BUILD_SHARED_LIBS)
+    add_dependencies(libchibi-scheme chibi-scheme-stubs)
+endif()
+
+add_compiled_library(lib/chibi/weak.c)
+add_compiled_library(lib/chibi/heap-stats.c)
+add_compiled_library(lib/chibi/disasm.c)
+add_compiled_library(lib/chibi/ast.c)
+add_compiled_library(lib/chibi/json.c)
+add_compiled_library(lib/srfi/18/threads.c)
+add_compiled_library(lib/chibi/optimize/rest.c)
+add_compiled_library(lib/chibi/optimize/profile.c)
+add_compiled_library(lib/srfi/27/rand.c)
+add_compiled_library(lib/srfi/151/bit.c)
+add_compiled_library(lib/srfi/39/param.c)
+add_compiled_library(lib/srfi/69/hash.c)
+add_compiled_library(lib/srfi/95/qsort.c)
+add_compiled_library(lib/srfi/98/env.c)
+add_compiled_library(lib/scheme/time.c)
+
+#
+# Generate clib.c for SEXP_USE_STATIC_LIBS
+#
+
+if (NOT BUILD_SHARED_LIBS)
+    string(REPLACE ";" "\n" genstatic-input "${slds}")
+    set(clibin ${CMAKE_CURRENT_BINARY_DIR}/clib-in.txt)
+    set(clibout ${CMAKE_CURRENT_BINARY_DIR}/clib.c)
+    set(genstatic-helper
+        ${CMAKE_CURRENT_LIST_DIR}/contrib/chibi-genstatic-helper.cmake)
+    file(WRITE ${clibin} "${genstatic-input}")
+
+    add_custom_command(OUTPUT ${clibout}
+        COMMAND
+        ${CMAKE_COMMAND}
+        -DEXEC=$<TARGET_FILE:chibi-scheme-bootstrap>
+        -DGENSTATIC=${chibi-genstatic}
+        "-DFEATURES=$<JOIN:${features},$<COMMA>>"
+        -DSTUBS=${clibin}
+        -DOUT=${clibout}
+        -P ${genstatic-helper}
+        WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+        DEPENDS
+        chibi-scheme-bootstrap
+        ${chibi-genstatic}
+        ${genstatic-helper}
+        ${slds})
+
+    # The generated file will #include both manually written files in
+    # the source directory as well as files generated by chibi-ffi in
+    # the build directory. The latter can be found without special flags,
+    # as they are relative to the clib.c, but the preprocessor needs
+    # help for the former. As only clib.c needs this flag, we set it
+    # as locally as possible, i.e., not as a target property.
+    set_source_files_properties(${clibout}
+        PROPERTIES
+        INCLUDE_DIRECTORIES
+        ${CMAKE_CURRENT_SOURCE_DIR})
+
+    target_compile_definitions(libchibi-scheme
+        PUBLIC
+        SEXP_USE_STATIC_LIBS=1)
+
+    target_sources(libchibi-scheme
+        PRIVATE
+        ${clibout})
+
+    target_link_libraries(libchibi-scheme
+        PRIVATE
+        ${stublinkedlibs})
+endif()
 
 #
 # Interpreter
 #
 
-include_directories(
-    .
-    ${stuboutdir}/..)
 add_executable(chibi-scheme
     main.c)
 
-bless_chibi_scheme_executable(chibi-scheme)
+target_link_libraries(chibi-scheme
+    PRIVATE libchibi-scheme)
+
+if(EMSCRIPTEN AND EMBED_MODULES AND (DEFINED ENV{EMSDK}))
+    #
+    # Embed all modules in the chibi-scheme executable.  If nothing else, this
+    # lets you confirm the build was successful by running something like
+    #
+    #   node chibi-scheme.js -e '(display "Hello, world!\n")'
+    #
+
+    set(modules-embed-obj "${CMAKE_CURRENT_BINARY_DIR}/modules-embed.o")
+    set(modules-embed-dep "${CMAKE_CURRENT_BINARY_DIR}/modules-embed.d")
+
+    add_custom_command(
+        OUTPUT "${modules-embed-obj}"
+        COMMAND
+            "$ENV{EMSDK}/upstream/emscripten/tools/file_packager"
+            ignored
+            --embed lib
+            --exclude *.c *.stub
+            "--obj-output=${modules-embed-obj}"
+            "--depfile=${modules-embed-dep}"
+            --quiet
+        WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
+        DEPFILE "${modules-embed-dep}")
+
+    target_sources(chibi-scheme
+        PRIVATE
+        "${modules-embed-obj}")
+endif()
 
 #
-# Generate "chibi/install.h" 
+# Generate "chibi/install.h"
 #
 
-if(CYGWIN OR WIN32)
-    set(thePrefix "bin")
-else()
-    set(thePrefix "lib")
-endif()
-
 if(WIN32)
-    set(pathsep "\\;")
+    # Leave this empty for now, as the default GNU install directories won't
+    # help on Windows.
+    set(default_module_path "")
 else()
-    set(pathsep ":")
+    string(JOIN ":" default_module_path
+        ${CMAKE_INSTALL_FULL_DATAROOTDIR}/chibi
+        ${CMAKE_INSTALL_FULL_LIBDIR}/chibi
+        ${CMAKE_INSTALL_FULL_DATAROOTDIR}/snow
+        ${CMAKE_INSTALL_FULL_LIBDIR}/snow)
 endif()
 
-if(WIN32)
-    set(platform "windows")
-else()
-    set(platform "unknown")
-endif()
+configure_file(include/chibi/install.h.in include/chibi/install.h)
 
-
-set(default_module_path
-    ""
-    #"${CMAKE_INSTALL_PREFIX}/${thePrefix}${pathsep}${CMAKE_INSTALL_PREFIX}/bin"
-    )
-
-file(MAKE_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/include/chibi)
-
-file(WRITE
-    ${CMAKE_CURRENT_BINARY_DIR}/include/chibi/install.h
-    "#define sexp_so_extension \"${soext}\"
-#define sexp_default_module_path \"${default_module_path}\"
-#define sexp_platform \"${platform}\"
-#define sexp_version \"\"
-#define sexp_release_name \"${release}\"")
-
-# 
+#
 # Testing
 #
 
@@ -260,28 +513,27 @@ enable_testing()
 
 set(chibi-scheme-tests
     r7rs-tests
-    ## Not connected
-    #division-tests
-    #r5rs-tests
-    #syntax-tests
-    #unicode-tests
-    ## Require threads
-    # lib-tests
-    )
+    division-tests
+    syntax-tests
+    unicode-tests)
 
 foreach(e ${chibi-scheme-tests})
     add_test(NAME "${e}"
-        COMMAND chibi-scheme tests/${e}.scm
+        COMMAND chibi-scheme -I ${CMAKE_CURRENT_BINARY_DIR}/lib tests/${e}.scm
         WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})
 endforeach()
 
+add_test(NAME r5rs-test
+    COMMAND chibi-scheme -I ${CMAKE_CURRENT_BINARY_DIR}/lib -xchibi tests/r5rs-tests.scm
+    WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})
+
 file(GLOB_RECURSE srfi_tests RELATIVE ${CMAKE_CURRENT_SOURCE_DIR}/lib
-    ${CMAKE_CURRENT_SOURCE_DIR}/lib/srfi/*/test.sld)
+    CONFIGURE_DEPENDS lib/srfi/*/test.sld)
 
 file(GLOB_RECURSE chibi_scheme_tests RELATIVE ${CMAKE_CURRENT_SOURCE_DIR}/lib
-    ${CMAKE_CURRENT_SOURCE_DIR}/lib/chibi/*-test.sld)
+    CONFIGURE_DEPENDS lib/chibi/*-test.sld)
 
-set(testexcludes
+set(win32testexcludes
     # Excluded tests
     chibi/filesystem-test
     chibi/memoize-test
@@ -296,33 +548,38 @@ set(testexcludes
     chibi/tar-test # Depends (chibi system)
     chibi/process-test # Not applicable
     chibi/pty-test # Depends (chibi pty)
+    chibi/shell-test # Depends Linux procfs
     )
 
-set(testlibs)
 foreach(e ${srfi_tests} ${chibi_scheme_tests})
     get_filename_component(pth ${e} PATH)
     get_filename_component(nam ${e} NAME_WE)
     list(APPEND testlibs ${pth}/${nam})
 endforeach()
-list(REMOVE_ITEM testlibs ${testexcludes})
+
+if(WIN32)
+    list(REMOVE_ITEM testlibs ${win32testexcludes})
+endif()
 
 foreach(e ${testlibs})
     string(REGEX REPLACE "/" "_" testname ${e})
     string(REGEX REPLACE "/" " " form ${e})
     add_test(NAME "lib_${testname}"
-        COMMAND chibi-scheme -e "(import (${form}))"
+        COMMAND chibi-scheme -I ${CMAKE_CURRENT_BINARY_DIR}/lib
+        -e "(import (${form}))"
         -e "(run-tests)"
         WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})
 endforeach()
 
-# 
+#
 # Testing (embedding)
 #
 
 add_executable(test-foreign-apply-loop
     tests/foreign/apply-loop.c)
 
-bless_chibi_scheme_executable(test-foreign-apply-loop)
+target_link_libraries(test-foreign-apply-loop
+    PRIVATE libchibi-scheme)
 
 add_test(NAME "foreign-apply-loop"
     COMMAND test-foreign-apply-loop
@@ -331,8 +588,154 @@ add_test(NAME "foreign-apply-loop"
 add_executable(test-foreign-typeid
     tests/foreign/typeid.c)
 
-bless_chibi_scheme_executable(test-foreign-typeid)
+target_link_libraries(test-foreign-typeid
+    PRIVATE libchibi-scheme)
 
 add_test(NAME "foreign-typeid"
     COMMAND test-foreign-typeid
     WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR})
+
+
+#
+# Image, pkgconfig and meta file generation
+#
+
+add_custom_command(OUTPUT chibi.img
+    COMMAND chibi-scheme -I ${CMAKE_CURRENT_BINARY_DIR}/lib -mchibi.repl
+    -d ${CMAKE_CURRENT_BINARY_DIR}/chibi.img
+    WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})
+add_custom_command(OUTPUT red.img
+    COMMAND chibi-scheme -I ${CMAKE_CURRENT_BINARY_DIR}/lib -xscheme.red -mchibi.repl
+    -d ${CMAKE_CURRENT_BINARY_DIR}/red.img
+    WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})
+add_custom_command(OUTPUT snow.img
+    COMMAND chibi-scheme -I ${CMAKE_CURRENT_BINARY_DIR}/lib
+        -mchibi.snow.commands -mchibi.snow.interface -mchibi.snow.package -mchibi.snow.utils
+        -d ${CMAKE_CURRENT_BINARY_DIR}/snow.img
+    WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})
+
+if(BUILD_SHARED_LIBS)
+    # Currently, image dumps only work with shared library builds, which includes Windows
+    add_custom_target(chibi-images ALL
+        DEPENDS
+        ${CMAKE_CURRENT_BINARY_DIR}/chibi.img
+        ${CMAKE_CURRENT_BINARY_DIR}/red.img
+        ${CMAKE_CURRENT_BINARY_DIR}/snow.img
+        # The dependency on libchibi-scheme is crucial here:
+        chibi-compiled-libs)
+endif()
+
+configure_file(contrib/chibi-scheme.pc.cmake.in chibi-scheme.pc @ONLY)
+
+function(generate_package_list libdir output)
+    add_custom_command(OUTPUT ${output}
+        COMMAND
+        ${CMAKE_COMMAND}
+        -DEXEC=$<IF:$<BOOL:CMAKE_CROSSCOMPILING>,$<TARGET_FILE:chibi-scheme-bootstrap>,$<TARGET_FILE:chibi-scheme>>
+        -DLIBDIR=${libdir}
+        -DGENMETA=tools/generate-install-meta.scm
+        -DVERSION=${CMAKE_PROJECT_VERSION}
+        -DOUT=${CMAKE_CURRENT_BINARY_DIR}/${output}
+        -P contrib/chibi-generate-install-meta-helper.cmake
+        WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+        DEPENDS
+        chibi-scheme
+        tools/generate-install-meta.scm
+        contrib/chibi-generate-install-meta-helper.cmake)
+endfunction()
+
+generate_package_list(lib/chibi .chibi.meta)
+generate_package_list(lib/scheme .scheme.meta)
+generate_package_list(lib/srfi .srfi.meta)
+
+add_custom_target(chibi-meta-lists ALL
+    DEPENDS
+    ${CMAKE_CURRENT_BINARY_DIR}/.chibi.meta
+    ${CMAKE_CURRENT_BINARY_DIR}/.scheme.meta
+    ${CMAKE_CURRENT_BINARY_DIR}/.srfi.meta)
+
+
+#
+# Installation
+#
+
+install(DIRECTORY include/chibi
+    DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
+    PATTERN "sexp-*.[hc]" EXCLUDE
+    PATTERN "*.h.in" EXCLUDE)
+
+install(FILES ${CMAKE_CURRENT_BINARY_DIR}/include/chibi/install.h
+    DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/chibi)
+
+install(FILES ${CMAKE_CURRENT_BINARY_DIR}/chibi-scheme.pc
+    DESTINATION ${CMAKE_INSTALL_LIBDIR}/pkgconfig)
+
+add_library(chibi::libchibi-scheme ALIAS libchibi-scheme)
+
+install(TARGETS libchibi-scheme libchibi-common chibi-scheme
+    EXPORT chibi-scheme-targets
+    RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
+    LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
+    ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR})
+
+install(FILES
+    tools/chibi-ffi
+    tools/chibi-doc
+    tools/snow-chibi
+    tools/snow-chibi.scm
+    DESTINATION ${CMAKE_INSTALL_BINDIR})
+
+install(FILES
+    doc/chibi-scheme.1
+    doc/chibi-ffi.1
+    doc/chibi-doc.1
+    DESTINATION ${CMAKE_INSTALL_MANDIR}/man1)
+
+if(BUILD_SHARED_LIBS)
+    install(FILES
+        ${CMAKE_CURRENT_BINARY_DIR}/chibi.img
+        ${CMAKE_CURRENT_BINARY_DIR}/red.img
+        ${CMAKE_CURRENT_BINARY_DIR}/snow.img
+        DESTINATION ${CMAKE_INSTALL_DATAROOTDIR}/chibi)
+endif()
+
+install(DIRECTORY
+    lib/
+    DESTINATION ${CMAKE_INSTALL_DATAROOTDIR}/chibi
+    PATTERN "*win32" EXCLUDE
+    PATTERN "*test.sld" EXCLUDE
+    PATTERN "*.c" EXCLUDE
+    PATTERN "*.stub" EXCLUDE)
+
+# This is to revert the above exclusion pattern
+install(FILES lib/chibi/test.sld
+    DESTINATION ${CMAKE_INSTALL_DATAROOTDIR}/chibi/chibi)
+
+if(WIN32)
+    install(DIRECTORY
+        lib/
+        DESTINATION ${CMAKE_INSTALL_DATAROOTDIR}/chibi
+        FILES_MATCHING
+        PATTERN "*win32/*.scm"
+        PATTERN "*win32/*.sld")
+endif()
+
+install(FILES
+    ${CMAKE_CURRENT_BINARY_DIR}/.chibi.meta
+    ${CMAKE_CURRENT_BINARY_DIR}/.scheme.meta
+    ${CMAKE_CURRENT_BINARY_DIR}/.srfi.meta
+    DESTINATION ${CMAKE_INSTALL_DATAROOTDIR}/chibi)
+
+install(EXPORT chibi-scheme-targets
+    FILE chibi-scheme-targets.cmake
+    NAMESPACE chibi::
+    DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/chibi)
+
+write_basic_package_version_file(chibi-scheme-config-version.cmake
+    VERSION ${CMAKE_PROJECT_VERSION}
+    COMPATIBILITY ExactVersion)
+
+install(FILES
+    contrib/chibi-scheme-config.cmake
+    ${CMAKE_CURRENT_BINARY_DIR}/chibi-scheme-config-version.cmake
+    DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/chibi)

@@ -2,7 +2,7 @@
 
 **Minimal Scheme Implementation for use as an Extension Language**
 
-http://synthcode.com/wiki/chibi-scheme
+https://github.com/ashinn/chibi-scheme
 
 Chibi-Scheme is a very small library intended for use as an extension
 and scripting language in C programs.  In addition to support for
@@ -27,7 +27,7 @@ see the manual for instructions on compiling with fewer features or
 requesting a smaller language on startup.
 
 Chibi-Scheme is known to work on **32** and **64-bit** Linux, FreeBSD,
-NetBSD, OpenBSD and OS X, Plan 9, Windows, iOS, Android,
+NetBSD, OpenBSD, DragonFlyBSD, OS X, Plan 9, Windows, iOS, Android,
 ARM and [Emscripten](https://kripken.github.io/emscripten-site).  Basic
 support for native Windows desktop also exists. See README-win32.md
 for details and build instructions.
@@ -50,7 +50,11 @@ to install the binaries and libraries.  You can optionally specify a
 By default files are installed in **/usr/local**.
 
 If you want to try out chibi-scheme without installing, be sure to set
-`LD_LIBRARY_PATH` so it can find the shared libraries.
+`LD_LIBRARY_PATH` (`DYLD_LIBRARY_PATH` on macOS) so it can find the
+shared libraries.
+
+To make the emscripten build run `make js` (_not_ `emmake make js`).
 
 For more detailed documentation, run `make doc` and see the generated
-*doc/chibi.html*.
+*doc/chibi.html* or read the [manual](http://synthcode.com/scheme/chibi/)
+online.

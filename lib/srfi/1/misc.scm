@@ -15,12 +15,16 @@
 (define (concatenate! lists)
   (if (null? lists)
       '()
-      (let lp ((ls lists))
-        (cond ((not (pair? (cdr ls)))
-               (car lists))
-              (else
-               (set-cdr! (last-pair (car ls)) (cadr ls))
-               (lp (cdr ls)))))))
+      (let loop ((acc    '())
+                 (prev   '())
+                 (rem    lists))
+          (cond
+            ((null? rem) acc)
+            ((null? acc) (let ((cur (car rem))) (loop cur cur (cdr rem))))
+            ((null? (car rem)) (loop acc prev (cdr rem)))
+            (else (let ((cur (car rem)))
+                    (set-cdr! (last-pair prev) cur)
+                    (loop acc cur (cdr rem))))))))
 
 (define (append-reverse rev tail)
   (if (null? rev) tail (append-reverse (cdr rev) (cons (car rev) tail))))

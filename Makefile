@@ -7,13 +7,16 @@ CHIBI_VERSION ?= $(shell cat VERSION)
 SOVERSION ?= $(CHIBI_VERSION)
 SOVERSION_MAJOR ?= $(shell echo "$(SOVERSION)" | sed "s/\..*//")
 
-CHIBI_FFI ?= $(CHIBI) -q tools/chibi-ffi
+FEATURES ?=
+
+CHIBI_FFI ?= $(CHIBI) -q tools/chibi-ffi $(FEATURES)
 CHIBI_FFI_DEPENDENCIES ?= $(CHIBI_DEPENDENCIES) tools/chibi-ffi
 
 CHIBI_DOC ?= $(CHIBI) tools/chibi-doc
 CHIBI_DOC_DEPENDENCIES ?= $(CHIBI_DEPENDENCIES) tools/chibi-doc $(COMPILED_LIBS)
 
-GENSTATIC ?= ./tools/chibi-genstatic
+CHIBI_GENSTATIC ?= $(CHIBI) -q tools/chibi-genstatic $(FEATURES)
+CHIBI_GENSTATIC_DEPENDENCIES ?= $(CHIBI_DEPENDENCIES) tools/chibi-genstatic
 
 CHIBI ?= LD_LIBRARY_PATH=".:$(LD_LIBRARY_PATH)" DYLD_LIBRARY_PATH=".:$(DYLD_LIBRARY_PATH)" CHIBI_IGNORE_SYSTEM_PATH=1 CHIBI_MODULE_PATH=lib ./chibi-scheme$(EXE)
 CHIBI_DEPENDENCIES = ./chibi-scheme$(EXE)
@@ -46,13 +49,14 @@ COMPILED_LIBS = $(CHIBI_COMPILED_LIBS) $(CHIBI_IO_COMPILED_LIBS) \
 BASE_INCLUDES = include/chibi/sexp.h include/chibi/features.h include/chibi/install.h include/chibi/bignum.h
 INCLUDES = $(BASE_INCLUDES) include/chibi/eval.h include/chibi/gc_heap.h
 
-MODULE_DOCS := app ast base64 bytevector config crypto/md5 crypto/rsa \
-	crypto/sha2 diff disasm doc edit-distance equiv filesystem generic \
-	heap-stats io iset/base iset/constructors iset/iterators json loop \
+MODULE_DOCS := app assert ast base64 binary-record bytevector config \
+	crypto/md5 crypto/rsa crypto/sha2 csv diff disasm doc edit-distance \
+	equiv filesystem generic heap-stats io \
+	iset/base iset/constructors iset/iterators json loop \
 	match math/prime memoize mime modules net net/http-server net/servlet \
 	optional parse pathname process repl scribble string stty sxml system \
 	temp-file test time trace type-inference uri weak monad/environment \
-	crypto/sha2
+	crypto/sha2 shell
 
 IMAGE_FILES = lib/chibi.img lib/red.img lib/snow.img
 
@@ -76,26 +80,35 @@ init-dev:
 
 js: js/chibi.js
 
-js/chibi.js: chibi-scheme-emscripten chibi-scheme-static.bc js/pre.js js/post.js js/exported_functions.json
-	emcc -O0 chibi-scheme-static.bc -o $@ -s ALLOW_MEMORY_GROWTH=1 -s MODULARIZE=1 -s EXPORT_NAME=\"Chibi\" -s EXPORTED_FUNCTIONS=@js/exported_functions.json `find  lib -type f \( -name "*.scm" -or -name "*.sld" \) -printf " --preload-file %p"` -s 'EXTRA_EXPORTED_RUNTIME_METHODS=["ccall", "cwrap"]' --pre-js js/pre.js --post-js js/post.js
+js/chibi.js: chibi-scheme-emscripten chibi-scheme-static.o js/pre.js js/post.js js/exported_functions.json
+	emcc -O0 chibi-scheme-static.o -o $@ -s ALLOW_MEMORY_GROWTH=1 -s MODULARIZE=1 -s EXPORT_NAME=\"Chibi\" -s EXPORTED_FUNCTIONS=@js/exported_functions.json `find  lib -type f \( -name "*.scm" -or -name "*.sld" \) | awk '{ printf " --preload-file %s", $$1 }'` -s 'EXPORTED_RUNTIME_METHODS=["ccall", "cwrap"]' --pre-js js/pre.js --post-js js/post.js
 
-chibi-scheme-static.bc:
-	emmake $(MAKE) PLATFORM=emscripten CHIBI_DEPENDENCIES= CHIBI=./chibi-scheme-emscripten PREFIX= CFLAGS=-O2 SEXP_USE_DL=0 EXE=.bc SO=.bc CPPFLAGS="-DSEXP_USE_STRICT_TOPLEVEL_BINDINGS=1 -DSEXP_USE_ALIGNED_BYTECODE=1 -DSEXP_USE_STATIC_LIBS=1 -DSEXP_USE_STATIC_LIBS_NO_INCLUDE=0" clibs.c chibi-scheme-static.bc
+chibi-scheme-static.o:
+	emmake $(MAKE) PLATFORM=emscripten CHIBI_DEPENDENCIES= CHIBI="CHIBI_IGNORE_SYSTEM_PATH=1 CHIBI_MODULE_PATH=lib ./chibi-scheme-emscripten" FEATURES="--features chibi,threads,emscripten,wasm32,little-endian" PREFIX= CFLAGS=-O2 SEXP_USE_DL=0 EXE=.o SO=.o STATICFLAGS=-shared CPPFLAGS="-DSEXP_USE_STRICT_TOPLEVEL_BINDINGS=1 -DSEXP_USE_ALIGNED_BYTECODE=1 -DSEXP_USE_STATIC_LIBS=1 -DSEXP_USE_STATIC_LIBS_NO_INCLUDE=0" clibs.c chibi-scheme-static.o VERBOSE=1
 
 chibi-scheme-emscripten: VERSION
 	$(MAKE) distclean
-	$(MAKE) chibi-scheme-static PLATFORM=emscripten SEXP_USE_DL=0
+	$(MAKE) chibi-scheme-static SEXP_USE_DL=0
 	(tempfile="`mktemp -t chibi.XXXXXX`" && \
 	mv chibi-scheme-static$(EXE) "$$tempfile" && \
 	$(MAKE) distclean; \
 	mv "$$tempfile" chibi-scheme-emscripten)
 
-include/chibi/install.h: Makefile
+include/chibi/install.h: Makefile.libs Makefile.detect
 	echo '#define sexp_so_extension "'$(SO)'"' > $@
 	echo '#define sexp_default_module_path "'$(MODDIR):$(BINMODDIR):$(SNOWMODDIR):$(SNOWBINMODDIR)'"' >> $@
 	echo '#define sexp_platform "'$(PLATFORM)'"' >> $@
+	echo '#define sexp_architecture "'$(ARCH)'"' >> $@
 	echo '#define sexp_version "'$(CHIBI_VERSION)'"' >> $@
 	echo '#define sexp_release_name "'`cat RELEASE`'"' >> $@
+
+lib/chibi/snow/install.sld: Makefile.libs Makefile.detect
+	echo '(define-library (chibi snow install)' > $@
+	echo '  (import (scheme base))' >> $@
+	echo '  (export snow-module-directory snow-binary-module-directory)' >> $@
+	echo '  (begin' >> $@
+	echo '   (define snow-module-directory "'$(SNOWMODDIR)'")' >> $@
+	echo '   (define snow-binary-module-directory "'$(SNOWBINMODDIR)'")))' >> $@
 
 %.o: %.c $(BASE_INCLUDES)
 	$(CC) -c $(XCPPFLAGS) $(XCFLAGS) $(CLIBFLAGS) -o $@ $<
@@ -137,8 +150,12 @@ chibi-scheme-static$(EXE): main.o $(SEXP_OBJS) $(EVAL_OBJS)
 chibi-scheme-ulimit$(EXE): main.o $(SEXP_ULIMIT_OBJS) $(EVAL_OBJS)
 	$(CC) $(XCFLAGS) $(STATICFLAGS) -o $@ $^ $(LDFLAGS) $(GCLDFLAGS) $(STATIC_LDFLAGS)
 
-clibs.c: $(GENSTATIC) $(CHIBI_DEPENDENCIES) $(COMPILED_LIBS:%$(SO)=%.c)
-	$(GIT) ls-files lib | $(GREP) .sld | $(CHIBI) -q $(GENSTATIC) > $@
+clibs.c: $(CHIBI_GENSTATIC_DEPENDENCIES) $(COMPILED_LIBS:%$(SO)=%.c)
+	if [ -d .git ]; then \
+		$(GIT) ls-files lib | $(GREP) .sld | $(CHIBI_GENSTATIC) > $@; \
+	else \
+		$(FIND) lib -name \*.sld | $(CHIBI_GENSTATIC) > $@; \
+	fi
 
 chibi-scheme.pc: chibi-scheme.pc.in
 	echo "# pkg-config" > chibi-scheme.pc
@@ -207,6 +224,7 @@ lib/chibi/show/width.scm: build-lib/chibi/char-set/width.scm chibi-scheme$(EXE)
 lib/scheme/char/case-offsets.scm: data/UnicodeData.txt data/CaseFolding.txt chibi-scheme$(EXE) all-libs
 	$(CHIBI) tools/extract-case-offsets.scm data/UnicodeData.txt data/CaseFolding.txt > $@
 
+# WARNING: this has a line for ß added by hand
 lib/scheme/char/special-casing.scm: data/CaseFolding.txt data/SpecialCasing.txt chibi-scheme$(EXE) all-libs
 	$(CHIBI) tools/extract-special-casing.scm data/CaseFolding.txt data/SpecialCasing.txt > $@
 
@@ -261,13 +279,16 @@ test-r5rs: chibi-scheme$(EXE)
 test-r7rs: chibi-scheme$(EXE)
 	$(CHIBI) tests/r7rs-tests.scm
 
+test-syntax: chibi-scheme$(EXE)
+	$(CHIBI) tests/syntax-tests.scm
+
 test: test-r7rs
 
 test-safe-string-cursors: chibi-scheme$(EXE)
 	$(CHIBI) -Dsafe-string-cursors tests/r7rs-tests.scm
 	$(CHIBI) -Dsafe-string-cursors tests/lib-tests.scm
 
-test-all: test test-libs test-ffi test-division
+test-all: test test-syntax test-libs test-ffi test-division
 
 test-dist: test-all test-memory test-build
 
@@ -278,7 +299,7 @@ bench-gabriel: chibi-scheme$(EXE)
 # Packaging
 
 clean: clean-libs
-	-$(RM) *.o *.i *.s *.bc *.8 tests/basic/*.out tests/basic/*.err \
+	-$(RM) *.o *.i *.s *.8 tests/basic/*.out tests/basic/*.err \
 	    tests/run/*.out tests/run/*.err
 
 cleaner: clean
@@ -287,6 +308,8 @@ cleaner: clean
 	    libchibi-scheme$(SO_VERSIONED_SUFFIX) \
 	    libchibi-scheme$(SO_MAJOR_VERSIONED_SUFFIX) \
 	    include/chibi/install.h lib/.*.meta \
+	    lib/chibi/snow/install.sld \
+	    clibs.c \
 	    chibi-scheme-emscripten \
 	    js/chibi.* \
 	    $(shell $(FIND) lib -name \*.o)
@@ -301,10 +324,10 @@ install-base: all
 	$(INSTALL) -m0755 tools/chibi-doc $(DESTDIR)$(BINDIR)/
 	$(INSTALL) -m0755 tools/snow-chibi $(DESTDIR)$(BINDIR)/
 	$(INSTALL) -m0755 tools/snow-chibi.scm $(DESTDIR)$(BINDIR)/
-	$(MKDIR) $(DESTDIR)$(MODDIR)/chibi/char-set $(DESTDIR)$(MODDIR)/chibi/crypto $(DESTDIR)$(MODDIR)/chibi/io $(DESTDIR)$(MODDIR)/chibi/iset $(DESTDIR)$(MODDIR)/chibi/loop $(DESTDIR)$(MODDIR)/chibi/match $(DESTDIR)$(MODDIR)/chibi/math $(DESTDIR)$(MODDIR)/chibi/monad $(DESTDIR)$(MODDIR)/chibi/net $(DESTDIR)$(MODDIR)/chibi/optimize $(DESTDIR)$(MODDIR)/chibi/parse $(DESTDIR)$(MODDIR)/chibi/regexp $(DESTDIR)$(MODDIR)/chibi/show $(DESTDIR)$(MODDIR)/chibi/snow $(DESTDIR)$(MODDIR)/chibi/term
+	$(MKDIR) $(DESTDIR)$(MODDIR)/chibi/char-set $(DESTDIR)$(MODDIR)/chibi/crypto $(DESTDIR)$(MODDIR)/chibi/io $(DESTDIR)$(MODDIR)/chibi/iset $(DESTDIR)$(MODDIR)/chibi/loop $(DESTDIR)$(MODDIR)/chibi/match $(DESTDIR)$(MODDIR)/chibi/math $(DESTDIR)$(MODDIR)/chibi/monad $(DESTDIR)$(MODDIR)/chibi/net $(DESTDIR)$(MODDIR)/chibi/optimize $(DESTDIR)$(MODDIR)/chibi/parse $(DESTDIR)$(MODDIR)/chibi/regexp $(DESTDIR)$(MODDIR)/chibi/show $(DESTDIR)$(MODDIR)/chibi/snow $(DESTDIR)$(MODDIR)/chibi/term $(DESTDIR)$(MODDIR)/chibi/text
 	$(MKDIR) $(DESTDIR)$(MODDIR)/scheme/char
 	$(MKDIR) $(DESTDIR)$(MODDIR)/scheme/time
-	$(MKDIR) $(DESTDIR)$(MODDIR)/srfi/1 $(DESTDIR)$(MODDIR)/srfi/18 $(DESTDIR)$(MODDIR)/srfi/27 $(DESTDIR)$(MODDIR)/srfi/151 $(DESTDIR)$(MODDIR)/srfi/39 $(DESTDIR)$(MODDIR)/srfi/69 $(DESTDIR)$(MODDIR)/srfi/95 $(DESTDIR)$(MODDIR)/srfi/99 $(DESTDIR)$(MODDIR)/srfi/99/records $(DESTDIR)$(MODDIR)/srfi/113 $(DESTDIR)$(MODDIR)/srfi/117 $(DESTDIR)$(MODDIR)/srfi/121 $(DESTDIR)$(MODDIR)/srfi/125 $(DESTDIR)$(MODDIR)/srfi/128 $(DESTDIR)$(MODDIR)/srfi/129 $(DESTDIR)$(MODDIR)/srfi/132 $(DESTDIR)$(MODDIR)/srfi/133 $(DESTDIR)$(MODDIR)/srfi/135 $(DESTDIR)$(MODDIR)/srfi/143 $(DESTDIR)$(MODDIR)/srfi/144 $(DESTDIR)$(MODDIR)/srfi/159 $(DESTDIR)$(MODDIR)/srfi/160 $(DESTDIR)$(MODDIR)/srfi/166 $(DESTDIR)$(MODDIR)/srfi/146 
+	$(MKDIR) $(DESTDIR)$(MODDIR)/srfi/1 $(DESTDIR)$(MODDIR)/srfi/18 $(DESTDIR)$(MODDIR)/srfi/27 $(DESTDIR)$(MODDIR)/srfi/151 $(DESTDIR)$(MODDIR)/srfi/39 $(DESTDIR)$(MODDIR)/srfi/69 $(DESTDIR)$(MODDIR)/srfi/95 $(DESTDIR)$(MODDIR)/srfi/99 $(DESTDIR)$(MODDIR)/srfi/99/records $(DESTDIR)$(MODDIR)/srfi/113 $(DESTDIR)$(MODDIR)/srfi/117 $(DESTDIR)$(MODDIR)/srfi/121 $(DESTDIR)$(MODDIR)/srfi/125 $(DESTDIR)$(MODDIR)/srfi/128 $(DESTDIR)$(MODDIR)/srfi/129 $(DESTDIR)$(MODDIR)/srfi/132 $(DESTDIR)$(MODDIR)/srfi/133 $(DESTDIR)$(MODDIR)/srfi/135 $(DESTDIR)$(MODDIR)/srfi/143 $(DESTDIR)$(MODDIR)/srfi/144 $(DESTDIR)$(MODDIR)/srfi/159 $(DESTDIR)$(MODDIR)/srfi/160 $(DESTDIR)$(MODDIR)/srfi/166 $(DESTDIR)$(MODDIR)/srfi/146 $(DESTDIR)$(MODDIR)/srfi/179 $(DESTDIR)$(MODDIR)/srfi/211 $(DESTDIR)$(MODDIR)/srfi/231
 	$(INSTALL) -m0644 $(META_FILES) $(DESTDIR)$(MODDIR)/
 	$(INSTALL) -m0644 lib/*.scm $(DESTDIR)$(MODDIR)/
 	$(INSTALL) -m0644 lib/chibi/*.sld lib/chibi/*.scm $(DESTDIR)$(MODDIR)/chibi/
@@ -323,6 +346,7 @@ install-base: all
 	$(INSTALL) -m0644 lib/chibi/show/*.sld lib/chibi/show/*.scm $(DESTDIR)$(MODDIR)/chibi/show/
 	$(INSTALL) -m0644 lib/chibi/snow/*.sld lib/chibi/snow/*.scm $(DESTDIR)$(MODDIR)/chibi/snow/
 	$(INSTALL) -m0644 lib/chibi/term/*.sld lib/chibi/term/*.scm $(DESTDIR)$(MODDIR)/chibi/term/
+	$(INSTALL) -m0644 lib/chibi/text/*.sld lib/chibi/text/*.scm $(DESTDIR)$(MODDIR)/chibi/text/
 	$(INSTALL) -m0644 lib/scheme/*.sld lib/scheme/*.scm $(DESTDIR)$(MODDIR)/scheme/
 	$(INSTALL) -m0644 lib/scheme/char/*.sld lib/scheme/char/*.scm $(DESTDIR)$(MODDIR)/scheme/char/
 	$(INSTALL) -m0644 lib/scheme/time/*.sld $(DESTDIR)$(MODDIR)/scheme/time/
@@ -351,10 +375,15 @@ install-base: all
 	$(INSTALL) -m0644 lib/srfi/159/*.scm $(DESTDIR)$(MODDIR)/srfi/159/
 	$(INSTALL) -m0644 lib/srfi/159/*.sld $(DESTDIR)$(MODDIR)/srfi/159/
 	$(INSTALL) -m0644 lib/srfi/160/*.sld $(DESTDIR)$(MODDIR)/srfi/160/
+	$(INSTALL) -m0644 lib/srfi/160/*.scm $(DESTDIR)$(MODDIR)/srfi/160/
 	$(INSTALL) -m0644 lib/srfi/166/*.sld $(DESTDIR)$(MODDIR)/srfi/166/
 	$(INSTALL) -m0644 lib/srfi/166/*.scm $(DESTDIR)$(MODDIR)/srfi/166/
 	$(INSTALL) -m0644 lib/srfi/146/*.sld $(DESTDIR)$(MODDIR)/srfi/146/
 	$(INSTALL) -m0644 lib/srfi/146/*.scm $(DESTDIR)$(MODDIR)/srfi/146/
+	$(INSTALL) -m0644 lib/srfi/179/*.sld $(DESTDIR)$(MODDIR)/srfi/179/
+	$(INSTALL) -m0644 lib/srfi/179/*.scm $(DESTDIR)$(MODDIR)/srfi/179/
+	$(INSTALL) -m0644 lib/srfi/211/*.sld $(DESTDIR)$(MODDIR)/srfi/211/
+	$(INSTALL) -m0644 lib/srfi/231/*.sld lib/srfi/231/*.scm $(DESTDIR)$(MODDIR)/srfi/231/
 	$(MKDIR) $(DESTDIR)$(BINMODDIR)/chibi/crypto/
 	$(MKDIR) $(DESTDIR)$(BINMODDIR)/chibi/io/
 	$(MKDIR) $(DESTDIR)$(BINMODDIR)/chibi/optimize/
@@ -389,14 +418,14 @@ install-base: all
 	$(INSTALL) -m0644 doc/chibi-scheme.1 $(DESTDIR)$(MANDIR)/
 	$(INSTALL) -m0644 doc/chibi-ffi.1 $(DESTDIR)$(MANDIR)/
 	$(INSTALL) -m0644 doc/chibi-doc.1 $(DESTDIR)$(MANDIR)/
-	-if type $(LDCONFIG) >/dev/null 2>/dev/null; then $(LDCONFIG); fi
+	-if type $(LDCONFIG) >/dev/null 2>/dev/null; then $(LDCONFIG) >/dev/null 2>/dev/null; fi
 
 install: install-base
 ifneq "$(IMAGE_FILES)" ""
 	echo "Generating images"
-	-LD_LIBRARY_PATH="$(DESTDIR)$(SOLIBDIR):$(LD_LIBRARY_PATH)" DYLD_LIBRARY_PATH="$(DESTDIR)$(SOLIBDIR):$(DYLD_LIBRARY_PATH)" CHIBI_MODULE_PATH="$(DESTDIR)$(MODDIR):$(DESTDIR)$(BINMODDIR)" $(DESTDIR)$(BINDIR)/chibi-scheme$(EXE) -mchibi.repl -d $(DESTDIR)$(MODDIR)/chibi.img
-	-LD_LIBRARY_PATH="$(DESTDIR)$(SOLIBDIR):$(LD_LIBRARY_PATH)" DYLD_LIBRARY_PATH="$(DESTDIR)$(SOLIBDIR):$(DYLD_LIBRARY_PATH)" CHIBI_MODULE_PATH="$(DESTDIR)$(MODDIR):$(DESTDIR)$(BINMODDIR)" $(DESTDIR)$(BINDIR)/chibi-scheme$(EXE) -xscheme.red -mchibi.repl -d $(DESTDIR)$(MODDIR)/red.img
-	-LD_LIBRARY_PATH="$(DESTDIR)$(SOLIBDIR):$(LD_LIBRARY_PATH)" DYLD_LIBRARY_PATH="$(DESTDIR)$(SOLIBDIR):$(DYLD_LIBRARY_PATH)" CHIBI_MODULE_PATH="$(DESTDIR)$(MODDIR):$(DESTDIR)$(BINMODDIR)" $(DESTDIR)$(BINDIR)/chibi-scheme$(EXE) -mchibi.snow.commands -mchibi.snow.interface -mchibi.snow.package -mchibi.snow.utils -d $(DESTDIR)$(MODDIR)/snow.img
+	-[ -z "$(DESTDIR)" ] && LD_LIBRARY_PATH="$(SOLIBDIR):$(LD_LIBRARY_PATH)" DYLD_LIBRARY_PATH="$(SOLIBDIR):$(DYLD_LIBRARY_PATH)" CHIBI_MODULE_PATH="$(MODDIR):$(BINMODDIR)" $(BINDIR)/chibi-scheme$(EXE) -mchibi.repl -d $(MODDIR)/chibi.img
+	-[ -z "$(DESTDIR)" ] && LD_LIBRARY_PATH="$(SOLIBDIR):$(LD_LIBRARY_PATH)" DYLD_LIBRARY_PATH="$(SOLIBDIR):$(DYLD_LIBRARY_PATH)" CHIBI_MODULE_PATH="$(MODDIR):$(BINMODDIR)" $(BINDIR)/chibi-scheme$(EXE) -xscheme.red -mchibi.repl -d $(MODDIR)/red.img
+	-[ -z "$(DESTDIR)" ] && LD_LIBRARY_PATH="$(SOLIBDIR):$(LD_LIBRARY_PATH)" DYLD_LIBRARY_PATH="$(SOLIBDIR):$(DYLD_LIBRARY_PATH)" CHIBI_MODULE_PATH="$(MODDIR):$(BINMODDIR)" $(BINDIR)/chibi-scheme$(EXE) -mchibi.snow.commands -mchibi.snow.interface -mchibi.snow.package -mchibi.snow.utils -d $(DESTDIR)$(MODDIR)/snow.img
 endif
 
 uninstall:
@@ -436,6 +465,7 @@ uninstall:
 	-$(RMDIR) $(DESTDIR)$(MODDIR)/chibi/show $(DESTDIR)$(BINMODDIR)/chibi/show
 	-$(RMDIR) $(DESTDIR)$(MODDIR)/chibi/snow $(DESTDIR)$(BINMODDIR)/chibi/snow
 	-$(RMDIR) $(DESTDIR)$(MODDIR)/chibi/term $(DESTDIR)$(BINMODDIR)/chibi/term
+	-$(RMDIR) $(DESTDIR)$(MODDIR)/chibi/text $(DESTDIR)$(BINMODDIR)/chibi/text
 	-$(RMDIR) $(DESTDIR)$(MODDIR)/chibi $(DESTDIR)$(BINMODDIR)/chibi
 	-$(RMDIR) $(DESTDIR)$(MODDIR)/scheme/char $(DESTDIR)$(BINMODDIR)/scheme/char
 	-$(RMDIR) $(DESTDIR)$(MODDIR)/scheme/time $(DESTDIR)$(BINMODDIR)/scheme/time
@@ -461,8 +491,13 @@ uninstall:
 	-$(RMDIR) $(DESTDIR)$(MODDIR)/srfi/143 $(DESTDIR)$(BINMODDIR)/srfi/143
 	-$(RMDIR) $(DESTDIR)$(MODDIR)/srfi/151 $(DESTDIR)$(BINMODDIR)/srfi/151
 	-$(RMDIR) $(DESTDIR)$(MODDIR)/srfi/144 $(DESTDIR)$(BINMODDIR)/srfi/144
+	-$(RMDIR) $(DESTDIR)$(MODDIR)/srfi/146 $(DESTDIR)$(BINMODDIR)/srfi/146
 	-$(RMDIR) $(DESTDIR)$(MODDIR)/srfi/159 $(DESTDIR)$(BINMODDIR)/srfi/159
 	-$(RMDIR) $(DESTDIR)$(MODDIR)/srfi/160 $(DESTDIR)$(BINMODDIR)/srfi/160
+	-$(RMDIR) $(DESTDIR)$(MODDIR)/srfi/166 $(DESTDIR)$(BINMODDIR)/srfi/166
+	-$(RMDIR) $(DESTDIR)$(MODDIR)/srfi/179 $(DESTDIR)$(BINMODDIR)/srfi/179
+	-$(RMDIR) $(DESTDIR)$(MODDIR)/srfi/211 $(DESTDIR)$(BINMODDIR)/srfi/211
+	-$(RMDIR) $(DESTDIR)$(MODDIR)/srfi/231 $(DESTDIR)$(BINMODDIR)/srfi/231
 	-$(RMDIR) $(DESTDIR)$(MODDIR)/srfi $(DESTDIR)$(BINMODDIR)/srfi
 	-$(RMDIR) $(DESTDIR)$(MODDIR) $(DESTDIR)$(BINMODDIR)
 	-$(RM) $(DESTDIR)$(MANDIR)/chibi-scheme.1 $(DESTDIR)$(MANDIR)/chibi-ffi.1 $(DESTDIR)$(MANDIR)/chibi-doc.1
@@ -494,9 +529,11 @@ snowballs:
 	$(SNOW_CHIBI) package --license public-domain lib/chibi/match.sld
 	$(SNOW_CHIBI) package -r lib/chibi/char-set.sld
 	$(SNOW_CHIBI) package -r lib/chibi/iset.sld lib/chibi/iset/optimize.sld
-	$(SNOW_CHIBI) package -r --doc https://srfi.schemers.org/srfi-166/srfi-166.html lib/srfi/166.sld lib/chibi/show/shared.sld
-	$(SNOW_CHIBI) package --doc https://srfi.schemers.org/srfi-115/srfi-115.html lib/srfi/115.sld
+	$(SNOW_CHIBI) package --doc https://srfi.schemers.org/srfi-115/srfi-115.html --test-library lib/srfi/115.sld
+	$(SNOW_CHIBI) package -r --doc https://srfi.schemers.org/srfi-166/srfi-166.html --test-library lib/srfi/166/test.sld lib/srfi/166.sld lib/chibi/show/shared.sld
+	$(SNOW_CHIBI) package -r --doc https://srfi.schemers.org/srfi-179/srfi-179.html --test-library lib/srfi/179/test.sld lib/srfi/179.sld
 	$(SNOW_CHIBI) package lib/chibi/app.sld
+	$(SNOW_CHIBI) package lib/chibi/assert.sld
 	$(SNOW_CHIBI) package lib/chibi/base64.sld
 	$(SNOW_CHIBI) package lib/chibi/binary-record.sld
 	$(SNOW_CHIBI) package lib/chibi/bytevector.sld

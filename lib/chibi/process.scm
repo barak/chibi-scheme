@@ -1,19 +1,28 @@
+(define unwind #f)
+
+((call/cc
+    (lambda (k)
+      (set! unwind k)
+      (lambda () #f))))
 
 (cond-expand
  (plan9
-  (define (exit . o)
+  (define (emergency-exit . o)
     (%exit (if (pair? o)
                (if (string? (car o))
                    (car o)
                    (if (eq? #t (car o)) "" "chibi error"))
                ""))))
  (else
-  (define (exit . o)
+  (define (emergency-exit . o)
     (%exit (if (pair? o)
                (if (integer? (car o))
                    (inexact->exact (car o))
                    (if (eq? #t (car o)) 0 1))
                0)))))
+
+(define (exit . o)
+  (unwind (lambda () (apply emergency-exit o))))
 
 (cond-expand
  (bsd
@@ -123,8 +132,11 @@
 ;;> \var{stdout} and \var{stderr} of the subprocess.  \var{command}
 ;;> should be a list beginning with the program name followed by any
 ;;> args, which may be symbols or numbers for convenience as with
-;;> \scheme{system}, or a string which is split on white-space.
-(define (call-with-process-io command proc)
+;;> \scheme{system}, or a string which is split on white-space.  If
+;;> provided, the optional \var{child-proc} is called in the child
+;;> process, after ports have been duplicated but before the command
+;;> is executed, to allow for actions such as port remapping.
+(define (call-with-process-io command proc . o)
   (define (set-non-blocking! fd)
     (cond-expand
      (threads
@@ -133,7 +145,8 @@
        (bitwise-ior open/non-block (get-file-descriptor-status fd))))
      (else
       #f)))
-  (let ((command-ls (if (string? command) (string-split command) command))
+  (let ((child-proc (and (pair? o) (car o)))
+        (command-ls (if (string? command) (string-split command) command))
         (in-pipe (open-pipe))
         (out-pipe (open-pipe))
         (err-pipe (open-pipe)))
@@ -152,6 +165,7 @@
              (close-file-descriptor (car in-pipe))
              (close-file-descriptor (cadr out-pipe))
              (close-file-descriptor (cadr err-pipe))
+             (if child-proc (child-proc))
              (execute (car command-ls) command-ls)
              (execute-returned command-ls))
             (else         ;; parent
@@ -175,6 +189,8 @@
      (close-output-port in)
      (let ((res (port->bytevector out)))
        (waitpid pid 0)
+       (close-input-port out)
+       (close-input-port err)
        res))))
 
 ;;> Utility to run \var{command} and return the accumulated output as
@@ -186,6 +202,8 @@
      (close-output-port in)
      (let ((res (port->string out)))
        (waitpid pid 0)
+       (close-input-port out)
+       (close-input-port err)
        res))))
 
 ;;> Utility to run \var{command} and return the accumulated output as
@@ -201,10 +219,12 @@
    command
    (lambda (pid in out err)
      (close-output-port in)
-     (let* ((out (port->string out))
-            (err (port->string err))
+     (let* ((outs (port->string out))
+            (errs (port->string err))
             (res (waitpid pid 0)))
-       (list out err (cadr res))))))
+       (close-input-port out)
+       (close-input-port err)
+       (list outs errs (cadr res))))))
 
 ;;> Utility to run \var{command} and return a list of two values:
 ;;> the accumulated output as a string, the error output as a string.
@@ -221,4 +241,6 @@
      (close-output-port in)
      (let ((res (port->string-list out)))
        (waitpid pid 0)
+       (close-input-port out)
+       (close-input-port err)
        res))))

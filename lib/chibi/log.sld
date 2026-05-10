@@ -20,7 +20,7 @@
    log-level-index log-level-name log-level-abbrev
    ;; the default logger
    default-logger log-emergency log-alert log-critical log-error
-   log-warn log-notice log-info log-debug
+   log-warn log-notice log-info log-debug log-trace
    with-log-level)
   (import (chibi time) (chibi string) (chibi show base))
   (cond-expand
@@ -28,11 +28,7 @@
     (import (chibi) (chibi filesystem) (chibi process) (chibi string)
             (chibi system) (srfi 9))
     (begin
-      (define write-string display)
-      (define (open-output-file/append path)
-        (let ((fd (open path
-                        (+ open/create open/write open/append open/non-block))))
-          (open-output-file-descriptor fd)))))
+      (define write-string display)))
    (else
     (import (scheme base) (scheme char) (scheme file) (chibi string))
     (begin
@@ -47,4 +43,20 @@
       (define (current-process-id) -1)
       (define (current-user-id) -1)
       (define (current-group-id) -1))))
+  (cond-expand
+   (debug
+    (begin (define default-initial-level 'debug)))
+   ((library (srfi 98))
+    (import (srfi 98))
+    (begin
+      (define default-initial-level
+        (or (cond ((get-environment-variable "SCHEME_LOG_LEVEL") =>
+                   (lambda (level)
+                     (or (string->number level)
+                         (and (not (equal? level ""))
+                              (string->symbol level)))))
+                  (else #f))
+            'info))))
+   (else
+    (begin (define default-initial-level 'info))))
   (include "log.scm"))

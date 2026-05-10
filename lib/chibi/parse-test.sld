@@ -21,6 +21,7 @@
 
       (test-not (parse parse-nothing ""))
       (test-not (parse parse-nothing "a"))
+      (test-error (parse-fully parse-nothing ""))
 
       (test-not (parse (parse-char #\a) ""))
       (test-assert (parse-fully (parse-char #\a) "a"))
@@ -52,6 +53,15 @@
         (test-assert (parse f "b"))
         (test-assert (parse f "aab"))
         (test-error (parse-fully f "aab")))
+
+      (let ((f (parse-seq (parse-char #\a)
+                          (parse-ignore (parse-char #\b)))))
+        (test '(#\a) (parse f "ab")))
+
+      (let ((f (parse-seq (parse-char #\a)
+                          (parse-ignore (parse-char #\b))
+                          (parse-char #\c))))
+        (test '(#\a #\c) (parse f "abc")))
 
       ;; grammars
 

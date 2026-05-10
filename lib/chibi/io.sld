@@ -1,6 +1,6 @@
 
 (define-library (chibi io)
-  (export read-string read-string! read-line write-line
+  (export read-string read-string! read-line write-line %%read-line
           port-fold port-fold-right port-map
           port->list port->string-list port->sexp-list
           port->string port->bytevector
@@ -14,7 +14,8 @@
           make-filtered-output-port make-filtered-input-port
           string-count-chars
           open-input-bytevector open-output-bytevector get-output-bytevector
-          string->utf8 utf8->string
+          string->utf8 string->utf8! string-offset utf8->string utf8->string!
+          utf8-ref utf8-next utf8-prev
           write-string write-u8 read-u8 peek-u8 send-file
           is-a-socket?
           call-with-input-file call-with-output-file)

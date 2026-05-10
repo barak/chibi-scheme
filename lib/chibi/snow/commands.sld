@@ -8,11 +8,14 @@
           command/upload
           command/implementations
           command/index
+          command/git-index
           command/install
+          command/install-dependencies
           command/remove
           command/search
           command/show
           command/status
+          command/srfi-list
           command/update
           command/upgrade)
   (import (scheme base)
@@ -59,4 +62,11 @@
    ((library (srfi 151)) (import (srfi 151)))
    ((library (srfi 33)) (import (srfi 33)))
    (else (import (srfi 60))))
+  (cond-expand
+   ((library (chibi snow install))
+    (import (chibi snow install)))
+   (else
+    (begin
+      (define snow-module-directory "/usr/local/share/snow")
+      (define snow-binary-module-directory "/usr/local/lib/snow"))))
   (include "commands.scm"))

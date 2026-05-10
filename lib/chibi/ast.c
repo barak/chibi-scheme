@@ -98,9 +98,26 @@ sexp sexp_get_procedure_variadic_p (sexp ctx, sexp self, sexp_sint_t n, sexp pro
   return sexp_make_boolean(sexp_procedure_variadic_p(proc));
 }
 
+sexp sexp_get_procedure_variable_transformer_p (sexp ctx, sexp self, sexp_sint_t n, sexp proc) {
+  sexp_assert_type(ctx, sexp_procedurep, SEXP_PROCEDURE, proc);
+  return sexp_make_boolean(sexp_procedure_variable_transformer_p(proc));
+}
+
 sexp sexp_get_procedure_flags (sexp ctx, sexp self, sexp_sint_t n, sexp proc) {
   sexp_assert_type(ctx, sexp_procedurep, SEXP_PROCEDURE, proc);
-  return sexp_make_fixnum(sexp_procedure_flags(proc));
+  return (sexp) (sexp_uint_t) sexp_procedure_flags(proc);
+}
+
+sexp sexp_make_variable_transformer_op (sexp ctx, sexp self, sexp_sint_t n, sexp base_proc) {
+  sexp flags;
+  sexp_assert_type(ctx, sexp_procedurep, SEXP_PROCEDURE, base_proc);
+  if (sexp_procedure_variable_transformer_p(base_proc))
+    return base_proc;
+  flags = sexp_make_fixnum(sexp_unbox_fixnum(sexp_procedure_flags(base_proc)) | SEXP_PROC_VARIABLE_TRANSFORMER);
+  return sexp_make_procedure(ctx, flags,
+                             sexp_make_fixnum(sexp_procedure_num_args(base_proc)),
+                             sexp_procedure_code(base_proc),
+                             sexp_procedure_vars(base_proc));
 }
 
 sexp sexp_get_opcode_name (sexp ctx, sexp self, sexp_sint_t n, sexp op) {
@@ -347,12 +364,21 @@ sexp sexp_immutablep_op (sexp ctx, sexp self, sexp_sint_t n, sexp x) {
   return sexp_pointerp(x) ? sexp_make_boolean(sexp_immutablep(x)) : SEXP_TRUE;
 }
 
-sexp sexp_make_immutable_op (sexp ctx, sexp self, sexp_sint_t n, sexp x) {
-  if (sexp_pointerp(x)) {
-    sexp_immutablep(x) = 1;
-    return SEXP_TRUE;
-  }
-  return SEXP_FALSE;
+sexp sexp_immutable_string_op (sexp ctx, sexp self, sexp_sint_t n, sexp s) {
+  sexp res;
+  sexp_assert_type(ctx, sexp_stringp, SEXP_STRING, s);
+#if SEXP_USE_PACKED_STRINGS
+  /* no sharing with packed strings */
+  res = sexp_c_string(ctx, sexp_string_data(s), sexp_string_size(s));
+#else
+  res = sexp_alloc_type(ctx, string, SEXP_STRING);
+  sexp_string_bytes(res) = sexp_string_bytes(s);
+  sexp_string_offset(res) = sexp_string_offset(s);
+  sexp_string_size(res) = sexp_string_size(s);
+  sexp_copy_on_writep(s) = 1;
+#endif
+  sexp_immutablep(res) = 1;
+  return res;
 }
 
 sexp sexp_integer_to_immediate (sexp ctx, sexp self, sexp_sint_t n, sexp i, sexp dflt) {
@@ -651,7 +677,6 @@ sexp sexp_init_library (sexp ctx, sexp self, sexp_sint_t n, sexp env, const char
   sexp_define_type_predicate(ctx, env, "ref?", SEXP_REF);
   sexp_define_type_predicate(ctx, env, "seq?", SEXP_SEQ);
   sexp_define_type_predicate(ctx, env, "lit?", SEXP_LIT);
-  sexp_define_type_predicate(ctx, env, "opcode?", SEXP_OPCODE);
   sexp_define_type_predicate(ctx, env, "type?", SEXP_TYPE);
   sexp_define_type_predicate(ctx, env, "core?", SEXP_CORE);
   sexp_define_type_predicate(ctx, env, "context?", SEXP_CONTEXT);
@@ -689,11 +714,14 @@ sexp sexp_init_library (sexp ctx, sexp self, sexp_sint_t n, sexp env, const char
   sexp_define_accessors(ctx, env, SEXP_MACRO, 1, "macro-env", NULL);
   sexp_define_accessors(ctx, env, SEXP_MACRO, 2, "macro-source", NULL);
   sexp_define_accessors(ctx, env, SEXP_MACRO, 3, "macro-aux", "macro-aux-set!");
+  sexp_define_foreign(ctx, env, "make-procedure", 4, sexp_make_procedure_op);
   sexp_define_foreign(ctx, env, "procedure-code", 1, sexp_get_procedure_code);
   sexp_define_foreign(ctx, env, "procedure-vars", 1, sexp_get_procedure_vars);
   sexp_define_foreign(ctx, env, "procedure-arity", 1, sexp_get_procedure_arity);
   sexp_define_foreign(ctx, env, "procedure-variadic?", 1, sexp_get_procedure_variadic_p);
+  sexp_define_foreign(ctx, env, "procedure-variable-transformer?", 1, sexp_get_procedure_variable_transformer_p);
   sexp_define_foreign(ctx, env, "procedure-flags", 1, sexp_get_procedure_flags);
+  sexp_define_foreign(ctx, env, "make-variable-transformer", 1, sexp_make_variable_transformer_op);
   sexp_define_foreign(ctx, env, "copy-lambda", 1, sexp_copy_lambda);
   sexp_define_foreign_opt(ctx, env, "make-lambda", 4, sexp_make_lambda_op, SEXP_NULL);
   sexp_define_foreign_opt(ctx, env, "make-cnd", 3, sexp_make_cnd_op, SEXP_VOID);
@@ -735,7 +763,7 @@ sexp sexp_init_library (sexp ctx, sexp self, sexp_sint_t n, sexp env, const char
   sexp_define_foreign(ctx, env, "core-code", 1, sexp_core_code_op);
   sexp_define_foreign(ctx, env, "object-size", 1, sexp_object_size);
   sexp_define_foreign(ctx, env, "immutable?", 1, sexp_immutablep_op);
-  sexp_define_foreign(ctx, env, "make-immutable!", 1, sexp_make_immutable_op);
+  sexp_define_foreign(ctx, env, "immutable-string", 1, sexp_immutable_string_op);
   sexp_define_foreign_opt(ctx, env, "integer->immediate", 2, sexp_integer_to_immediate, SEXP_FALSE);
   sexp_define_foreign_opt(ctx, env, "object->integer", 1, sexp_object_to_integer, SEXP_FALSE);
   sexp_define_foreign(ctx, env, "gc", 0, sexp_gc_op);

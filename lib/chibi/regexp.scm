@@ -30,8 +30,9 @@
   (accept? state-accept? state-accept?-set!)
   ;; A char or char-set indicating when we can transition.
   ;; Alternately, #f indicates an epsilon transition, while a
-  ;; procedure of the form (lambda (ch i matches) ...) is a predicate
-  ;; which should return #t if the char matches.
+  ;; procedure is a guarded epsilon transition which advances
+  ;; only if the procedure returns a true value.  The signature
+  ;; is of the form (proc str i ch start end matches).
   (chars state-chars state-chars-set!)
   ;; A single integer indicating the match position to record.
   (match state-match state-match-set!)
@@ -300,11 +301,9 @@
     (if (not (eq? m (searcher-matches sr1)))
         (searcher-matches-set! sr1 (copy-regexp-match m)))))
 
-(define (searcher-max sr1 sr2)
-  (if (or (not (searcher? sr2))
-          (regexp-match>=? (searcher-matches sr1) (searcher-matches sr2)))
-      sr1
-      sr2))
+(define (searcher>=? sr1 sr2)
+  (or (not (searcher? sr2))
+      (regexp-match>=? (searcher-matches sr1) (searcher-matches sr2))))
 
 (define (searcher-start-match sr)
   (regexp-match-ref (searcher-matches sr) 0))
@@ -344,6 +343,26 @@
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;; Execution
 
+;; The intermediate state of a regexp search. Differs from a match in that a
+;; match has not necessarily occurred, and includes additional information
+;; needed to resume searching.
+
+(define-record-type Regexp-State
+  (%make-regexp-state searchers accept string)
+  regexp-state?
+  (searchers regexp-state-searchers regexp-state-searchers-set!)
+  (accept regexp-state-accept regexp-state-accept-set!)
+  (string regexp-state-string regexp-state-string-set!))
+
+(define (make-regexp-state . o)
+  (let ((searchers (if (pair? o) (car o) (posse)))
+        (accept (and (pair? o) (pair? (cdr o)) (cadr o))))
+    (%make-regexp-state searchers accept #f)))
+
+(define (regexp-state-matches state)
+  (cond ((regexp-state-accept state) => searcher-matches)
+        (else #f)))
+
 ;; A transition which doesn't advance the index.
 
 (define (epsilon-state? st)
@@ -370,7 +389,7 @@
 ;; Advance epsilons together - if the State is newly added to the
 ;; group and is an epsilon state, recursively add the transition.
 
-(define (posse-advance! new seen accept sr str i start end)
+(define (posse-advance! new seen state sr str i start end)
   (let advance! ((sr sr))
     (let ((st (searcher-state sr)))
       ;; Update match data.
@@ -394,7 +413,10 @@
       ;; Follow transitions.
       (cond
        ((state-accept? st)
-        (set-cdr! accept (searcher-max sr (cdr accept))))
+        (cond
+         ((searcher>=? sr (regexp-state-accept state))
+          (regexp-state-accept-set! state sr)
+          (regexp-state-string-set! state str))))
        ((posse-ref seen sr)
         => (lambda (sr-prev) (searcher-merge! sr-prev sr)))
        ((epsilon-state? st)
@@ -406,8 +428,7 @@
             (posse-add! seen sr)
             (let* ((next1 (state-next1 st))
                    (next2 (state-next2 st))
-                   (matches
-                    (and next2 (searcher-matches sr))))
+                   (matches (and next2 (searcher-matches sr))))
               (cond
                (next1
                 (searcher-state-set! sr next1)
@@ -424,27 +445,27 @@
         ;; Add new searcher.
         (posse-add! new sr))))))
 
-;; Run so long as there is more to match.
-
-(define (regexp-run-offsets search? rx str start end)
+;;> Advances the search until an optimal match is found or the end of the string
+;;> is reached, and returns the resulting regexp state.
+(define (regexp-advance! search? init? rx str start end . o)
   (let ((rx (regexp rx))
-        (epsilons (posse))
-        (accept (list #f)))
+        (state (if (pair? o) (car o) (make-regexp-state)))
+        (epsilons (posse)))
     (let lp ((i start)
              (searchers1 (posse))
              (searchers2 (posse)))
       ;; Advance initial epsilons once from the first index, or every
       ;; time when searching.
       (cond
-       ((or search? (string-cursor=? i start))
-        (posse-advance! searchers1 epsilons accept (make-start-searcher rx str)
+       ((or search? (and init? (string-cursor=? i start)))
+        (posse-advance! searchers1 epsilons state (make-start-searcher rx str)
                         str i start end)
         (posse-clear! epsilons)))
       (cond
        ((or (string-cursor>=? i end)
             (and search?
-                 (searcher? (cdr accept))
-                 (let ((accept-start (searcher-start-match (cdr accept))))
+                 (searcher? (regexp-state-accept state))
+                 (let ((accept-start (searcher-start-match (regexp-state-accept state))))
                    (posse-every
                     (lambda (searcher)
                       (string-cursor>? (searcher-start-match searcher)
@@ -452,30 +473,37 @@
                     searchers1)))
             (and (not search?)
                  (posse-empty? searchers1)))
-        ;; Terminate when the string is done or there are no more
-        ;; searchers.  If we terminate prematurely and are not
-        ;; searching, return false.
-        (and (searcher? (cdr accept))
-             (let ((matches (searcher-matches (cdr accept))))
-               (and (or search? (string-cursor>=? (regexp-match-ref matches 1)
-                                                  end))
-                    (searcher-matches (cdr accept))))))
+        ;; Terminate when the string is done or there are no more searchers or
+        ;; we've found an accept state which started before any pending matches.
+        ;; If we terminate prematurely and are not searching, return false.
+        (regexp-state-searchers-set! state searchers1)
+        state)
        (else
-        ;; Otherwise advance normally.
+        ;; Otherwise advance normally from searchers1, storing the new state in
+        ;; searchers2, and recurse swapping the two (to reduce garbage).
         (let ((ch (string-cursor-ref str i))
               (i2 (string-cursor-next str i)))
-          (posse-for-each  ;; NOTE: non-deterministic from hash order
+          (posse-for-each ;; NOTE: non-deterministic from hash order
            (lambda (sr)
              (cond
               ((state-matches? (searcher-state sr) str i ch
                                start end (searcher-matches sr))
                (searcher-state-set! sr (state-next1 (searcher-state sr)))
                ;; Epsilons are considered at the next position.
-               (posse-advance! searchers2 epsilons accept sr str i2 start end)
+               (posse-advance! searchers2 epsilons state sr str i2 start end)
                (posse-clear! epsilons))))
            searchers1)
           (posse-clear! searchers1)
           (lp i2 searchers2 searchers1)))))))
+
+;; Run so long as there is more to match.
+
+(define (regexp-run-offsets search? rx str start end)
+  (let ((state (regexp-advance! search? #t rx str start end)))
+    (and (searcher? (regexp-state-accept state))
+         (let ((matches (searcher-matches (regexp-state-accept state))))
+           (and (or search? (string-cursor>=? (regexp-match-ref matches 1) end))
+                matches)))))
 
 ;; Wrapper to determine start and end offsets.
 
@@ -568,6 +596,28 @@
                   (sce (string-cursor->index str end))
                   (m (regexp-search re:grapheme str sci sce)))
              (and m (<= (regexp-match-submatch-end m 0) sci))))))
+
+(define (match/look-ahead sres)
+  (let ((rx (regexp `(seq bos ,@sres))))
+    (lambda (str i ch start end matches)
+      (and (regexp-run-offsets #t rx str i end)
+           #t))))
+
+(define (match/look-behind sres)
+  (let ((rx (regexp `(seq ,@sres eos))))
+    (lambda (str i ch start end matches)
+      (and (regexp-run-offsets #t rx str start i)
+           #t))))
+
+(define (match/neg-look-ahead sres)
+  (let ((rx (regexp `(seq bos ,@sres))))
+    (lambda (str i ch start end matches)
+      (not (regexp-run-offsets #t rx str i end)))))
+
+(define (match/neg-look-behind sres)
+  (let ((rx (regexp `(seq ,@sres eos))))
+    (lambda (str i ch start end matches)
+      (not (regexp-run-offsets #t rx str start i)))))
 
 (define (lookup-char-set name flags)
   (cond
@@ -924,6 +974,24 @@
                                (sre->char-set `(or ,@(cdr sre)) flags)))))
                flags
                next))
+        ;; TODO: The look-around assertions are O(n^d) where d is the
+        ;; nesting depth of the assertions, i.e. quadratic for one
+        ;; look-ahead, cubic for a look-behind inside a look-ahead,
+        ;; etc.  We could consider instead advancing the look-aheads
+        ;; together from the current position (and advancing the
+        ;; look-behinds from the beginning) and checking if the
+        ;; corresponding state matches.  The trick is the look-aheads
+        ;; don't necessarily have the same length - we have to keep
+        ;; advancing until they resolve and keep or prune the
+        ;; corresponding non-look-ahead states accordingly.
+        ((look-ahead)
+         (make-char-state (match/look-ahead (cdr sre)) flags next (next-id)))
+        ((look-behind)
+         (make-char-state (match/look-behind (cdr sre)) flags next (next-id)))
+        ((neg-look-ahead)
+         (make-char-state (match/neg-look-ahead (cdr sre)) flags next (next-id)))
+        ((neg-look-behind)
+         (make-char-state (match/neg-look-behind (cdr sre)) flags next (next-id)))
         ((w/case)
          (->rx `(: ,@(cdr sre)) (flag-clear flags ~ci?) next))
         ((w/nocase)

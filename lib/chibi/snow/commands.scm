@@ -3,6 +3,8 @@
 ;; This code was written by Alex Shinn in 2014 and placed in the
 ;; Public Domain.  All warranties are disclaimed.
 
+(define git-repo-path ".snow-repo.scm")
+
 (define (impl-available? cfg spec confirm?)
   (if (find-in-path (cadr spec))
       (or (null? (cddr spec))
@@ -24,9 +26,10 @@
                    (else
                     (warn msg)
                     #f))))))
-      (and confirm?
-           (yes-or-no? cfg "Implementation " (car spec) " does not "
-                       " seem to be available, install anyway?"))))
+      (or (equal? (car spec) 'generic)
+          (and confirm?
+               (yes-or-no? cfg "Implementation " (car spec) " does not "
+                           " seem to be available, install anyway?")))))
 
 (define (conf-selected-implementations cfg)
   (let ((requested (conf-get-list cfg 'implementations '(chibi))))
@@ -129,7 +132,8 @@
          declarations ...)
        (let* ((dir (library-path-base file name))
               (lib-file (path-relative file dir))
-              (lib-dir (path-directory lib-file)))
+              (lib-dir (path-directory lib-file))
+              (foreign-depends (conf-get-list cfg 'foreign-depends)))
          (define (resolve file)
            (let ((dest-path (if (equal? lib-dir ".")
                                 file
@@ -158,7 +162,8 @@
                (warn "couldn't find ffi stub or c source" base)
                '()))))
          (let lp ((ls declarations)
-                  (info `(,@(cond
+                  (info `((foreign-depends ,@foreign-depends)
+                          ,@(cond
                              ((conf-get cfg '(command package author))
                               => (lambda (x) (list (list 'author x))))
                              (else '()))
@@ -633,36 +638,156 @@
       (write-bytevector tarball out)
       (close-output-port out))))
 
+(define (command/install-dependencies cfg spec scm-file)
+  (let ((dependencies (extract-program-dependencies scm-file)))
+    (cond ((null? dependencies)
+           (display "Could not get program dependencies, or program has no snow dependencies.")
+           (newline))
+          ((yes-or-no? cfg
+                       "Found dependencies: "
+                       (cdar dependencies)
+                       #\newline
+                       "Install")
+           (apply command/install
+                  `(,cfg ,spec
+                         ,@(map write-to-string (cdar dependencies))))))))
+
+(define (command/srfi-list cfg spec)
+  (let ((implementations (conf-get cfg 'implementations)))
+    (cond
+      ((and (symbol? implementations))
+       (display (cdr (native-srfi-support implementations cfg))))
+      (else
+        (display
+          (map (lambda (impl)
+                 (native-srfi-support impl cfg))
+               (if implementations
+                 implementations
+                 (map
+                   car
+                   (filter
+                     (lambda (x)
+                       (impl-available? cfg x #f))
+                     known-implementations)))))))
+    (newline)))
+
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;; Index - add packages to a local repository file.
 
 (define (command/index cfg spec repo-path . pkg-files)
   (let* ((dir (path-directory repo-path))
          (pkgs (filter-map
-                (lambda (pkg-file)
-                  (let ((pkg (package-file-meta pkg-file)))
-                    (and pkg
-                         `(,(car pkg)
-                           (url ,(path-relative-to pkg-file dir))
-                           ,@(cdr pkg)))))
-                (if (pair? pkg-files)
-                    pkg-files
-                    (filter package-file?
-                            (map
+                 (lambda (pkg-file)
+                   (let ((pkg (package-file-meta pkg-file)))
+                     (and pkg
+                          `(,(car pkg)
+                             (url ,(path-relative-to pkg-file dir))
+                             ,@(cdr pkg)))))
+                 (if (pair? pkg-files)
+                   pkg-files
+                   (filter package-file?
+                           (map
                              (lambda (f) (make-path dir f))
                              (directory-files dir))))))
          (repo (fold (lambda (pkg repo)
                        (let ((name (package-name pkg)))
                          `(,(car repo)
-                           ,pkg
-                           ,@(remove
-                              (lambda (x) (equal? name (package-name x)))
-                              (cdr repo)))))
+                            ,pkg
+                            ,@(remove
+                                (lambda (x) (equal? name (package-name x)))
+                                (cdr repo)))))
                      (guard (exn (else (list 'repository)))
                        (car (file->sexp-list repo-path)))
                      pkgs)))
     (call-with-output-file repo-path
-      (lambda (out) (write-simple-pretty repo out)))))
+                           (lambda (out) (write-simple-pretty repo out)))))
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;; Git Index - add packages to a local repository file.
+
+(define (process->pair-or-null key cmd)
+  (let ((out (process->string cmd)))
+    (if (string=? out "")
+      '()
+      `(,key ,(read-line (open-input-string out))))))
+
+(define (command/git-index cfg spec . pkg-files)
+  (when (null? pkg-files)
+    (error "Give at least one package .tgz file as argument"))
+  (for-each
+    (lambda (pkg-file)
+      (when (not (string-suffix? ".tgz" pkg-file))
+        (error "All packages must be .tgz files. Use snow-chibi package command")))
+    pkg-files)
+  (let* ((repo-path git-repo-path)
+         (dir (path-directory repo-path))
+         (fix-git-url
+           (lambda (cfg url-pair)
+             (let* ((use-ssh-url? (conf-get cfg '(command git-index use-ssh-url?)))
+                    (url (cadr url-pair)))
+               `(url ,(cond
+                        ((and (string-prefix? "git@" url) use-ssh-url?) url)
+                        ((and (string-prefix? "ssh://" url) use-ssh-url?) url)
+                        ((string-prefix? "git@" url)
+                         (uri->string
+                           (uri-with-scheme
+                             (string->uri
+                               (string-append "https://" (string-copy url 4)))
+                               'https)))
+                        ((and (string-prefix? "https://" url) use-ssh-url?)
+                         (uri->string
+                           (uri-with-scheme (string->uri url) 'ssh)))
+                        ((string-prefix? "https://" url) url)
+                        (else (error "Could not fix repository url" url)))))))
+         (pkgs (filter-map
+                 (lambda (pkg-file)
+                   (let* ((pkg (guard (exn (else #f))
+                                 (package-file-meta pkg-file)))
+                          (hash (process->pair-or-null 'hash "git rev-parse HEAD"))
+                          (tag (process->pair-or-null 'tag "git describe --exact-match --tags --abbrev=0"))
+                          (url (process->pair-or-null 'url "git config --get remote.origin.url"))
+                          (updated (tai->rfc-3339 (current-second))))
+                     (cond ((not pkg)
+                            (error "Could not get package metadata" pkg-file))
+                           ((or (null? url) (null? hash))
+                            (error "Directory is not a git repository"))
+                           ((string=? (cadr hash) "HEAD")
+                            (error "Can not index in empty git repository"
+                                   hash)))
+                     (and pkg
+                          `(,(car pkg)
+                             ,(cons
+                                'git
+                                (remove null? (list hash
+                                                    tag
+                                                    (fix-git-url cfg url))))
+                             ,@(cdr pkg) (updated ,updated)))))
+                 (if (pair? pkg-files)
+                   pkg-files
+                   (filter package-file?
+                           (map
+                             (lambda (f) (make-path dir f))
+                             (directory-files dir))))))
+         (repo (fold (lambda (pkg repo)
+                       (let ((name (package-name pkg))
+                             (version (package-version pkg)))
+                         (when (not version)
+                           (error "Can not index package without a version" pkg))
+                         `(,(car repo)
+                            ,pkg
+                            ,@(remove
+                                (lambda (x)
+                                  (equal? name (package-name x))
+                                  (equal? version (package-version x))
+                                  )
+                                (cdr repo)))))
+                     (guard (exn (else (list 'repository)))
+                       (car (file->sexp-list repo-path)))
+                     pkgs)))
+    (call-with-output-file repo-path
+                           (lambda (out) (write-simple-pretty repo out)))
+    (display (string-append "Updated " git-repo-path))
+    (newline)))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;; Gen-key - generate a new RSA key pair.
@@ -772,7 +897,9 @@
                              => (lambda (y)
                                   `("-F" ,(string-append
                                            (display-to-string (car x)) "="
-                                           (display-to-string (cdr y))))))
+                                           (write-to-string
+                                            (display-to-string (cdr y)))
+                                           "\""))))
                             ((and (pair? (cdr x)) (assq 'file (cdr x)))
                              => (lambda (y)
                                   `("-F" ,(string-append
@@ -781,7 +908,8 @@
                             (else
                              `("-F" ,(string-append
                                       (display-to-string (car x)) "="
-                                      (display-to-string (cdr x)))))))
+                                      (write-to-string
+                                       (display-to-string (cdr x))))))))
                          params)
                       ,(uri->string uri))))
       (open-input-bytevector (process->bytevector cmd))))
@@ -791,10 +919,18 @@
     (http-post uri params))))
 
 (define (remote-command cfg name path params)
-  (let ((uri (remote-uri cfg name path)))
-    (sxml-display-as-text
-     (read (snow-post cfg uri (cons '(fmt . "sexp") params))))
-    (newline)))
+  (let* ((uri (remote-uri cfg name path))
+         (response
+          (port->string (snow-post cfg uri (cons '(fmt . "sexp") params)))))
+    (guard (exn (else
+                 (display "ERROR: couldn't display sxml response: ")
+                 (write response)
+                 (newline)))
+      (let ((sxml (call-with-input-string response read)))
+        (if (null? sxml)
+            (display "WARN: () response from server")
+            (sxml-display-as-text sxml))
+        (newline)))))
 
 (define (command/reg-key cfg spec)
   (let* ((keys (call-with-input-file
@@ -1004,7 +1140,11 @@
          (let ((dir (make-path (get-install-source-dir impl cfg) path)))
            (if (and (file-directory? dir)
                     (= 2 (length (directory-files dir))))
-               (remove-directory cfg dir)))))))
+               (remove-directory cfg dir)))
+         (when (eq? impl 'guile)
+           (let ((go-file (string-append (make-path (get-install-library-dir impl cfg) path)
+                                         ".go")))
+             (warn-delete-file cfg go-file)))))))
 
 (define (command/remove cfg spec . args)
   (let* ((impls (conf-selected-implementations cfg))
@@ -1147,21 +1287,28 @@
          (local-base (string-append "repo-" repo-id ".scm")))
     (make-path local-dir local-base)))
 
-(define (update-repository cfg repo-uri)
+(define (update-repository cfg repo-uri uri-type)
   (let* ((local-path (repository-local-path cfg repo-uri))
          (local-dir (path-directory local-path))
          (local-tmp (string-append local-path ".tmp."
                                    (number->string (current-second)) "-"
                                    (number->string (current-process-id))))
-         (repo-str (utf8->string (resource->bytevector cfg repo-uri)))
+         (repo-str
+           (cond
+             ((equal? uri-type 'http)
+              (utf8->string (resource->bytevector cfg repo-uri)))
+             ((equal? uri-type 'git)
+              (utf8->string (git-resource->bytevector cfg
+                                                      repo-uri
+                                                      git-repo-path)))))
          (repo (guard (exn (else #f))
                  (let ((repo (read (open-input-string repo-str))))
                    `(,(car repo) (url ,repo-uri) ,@(cdr repo))))))
     (cond
      ((not (valid-repository? repo))
-      (warn "not a valid repository: " repo-uri repo))
+      (warn "not a valid repository" repo-uri repo))
      ((not (create-directory* local-dir))
-      (warn "can't create directory: " local-dir))
+      (warn "can't create directory" local-dir))
      (else
       (guard (exn (else (die 2 "couldn't write repository")))
         (call-with-output-file local-tmp
@@ -1193,11 +1340,18 @@
      #f)))
 
 ;; returns the single repo as a sexp, updated as needed
-(define (maybe-update-repository cfg repo-uri)
-  (or (guard (exn (else #f))
+(define (maybe-update-repository cfg repo-uri uri-type)
+  (or (guard (exn
+              (else
+               (warn "error updating remote repository: "
+                     repo-uri " error: " exn)
+               #f))
         (and (should-update-repository? cfg repo-uri)
-             (update-repository cfg repo-uri)))
-      (guard (exn (else '(repository)))
+             (update-repository cfg repo-uri uri-type)))
+      (guard (exn
+              (else
+               (warn "error reading local repository: " exn)
+               '(repository)))
         (call-with-input-file (repository-local-path cfg repo-uri)
           read))))
 
@@ -1211,10 +1365,11 @@
 ;; not to be confused with the current-repo util in (chibi snow fort)
 ;; which returns the single host
 (define (current-repositories cfg)
-  (define (make-loc uri trust depth) (vector uri trust depth))
+  (define (make-loc uri uri-type trust depth) (vector uri uri-type trust depth))
   (define (loc-uri loc) (vector-ref loc 0))
-  (define (loc-trust loc) (vector-ref loc 1))
-  (define (loc-depth loc) (vector-ref loc 2))
+  (define (loc-uri-type loc) (vector-ref loc 1))
+  (define (loc-trust loc) (vector-ref loc 2))
+  (define (loc-depth loc) (vector-ref loc 3))
   (define (adjust-package-urls ls uri)
     (map
      (lambda (x)
@@ -1228,7 +1383,7 @@
                (and (pair? x)
                     (eq? 'url (car x))))
              ls)))
-  (let lp ((ls (map (lambda (x) (make-loc x 1.0 0))
+  (let lp ((ls (map (lambda (x) (make-loc x 'http 1.0 0))
                     (get-repository-list cfg)))
            (seen '())
            (res '()))
@@ -1244,12 +1399,16 @@
             (loc-uri (car ls)) (loc-trust (car ls)) )
       (lp (cdr ls)))
      (else
-      (let ((uri (uri-normalize (loc-uri (car ls)))))
+      (let* ((uri-type (loc-uri-type (car ls)))
+             (uri (if (equal? uri-type 'http)
+                    (uri-normalize (loc-uri (car ls)))
+                    (loc-uri (car ls)))))
         (if (member uri seen)
             (lp (cdr ls) seen res)
-            (let* ((repo (maybe-update-repository cfg uri))
+            (let* ((repo (maybe-update-repository cfg uri uri-type))
                    (siblings
-                    (if (and repo (conf-get cfg 'follow-siblings? #t))
+                    (if (and (valid-repository? repo)
+                             (conf-get cfg 'follow-siblings? #t))
                         (let ((uri-base
                                (if (string-suffix? "/" uri)
                                    uri
@@ -1258,13 +1417,16 @@
                            (lambda (x)
                              (and (pair? x)
                                   (eq? 'sibling (car x))
-                                  (assoc-get (cdr x) 'url)
+                                  (or (assoc-get (cdr x) 'url)
+                                      (assoc-get (cdr x) 'git))
                                   (make-loc
-                                   (uri-resolve (assoc-get (cdr x) 'url)
-                                                uri-base)
-                                   (* (loc-trust (car ls))
-                                      (or (assoc-get (cdr x) 'trust) 1.0))
-                                   (+ (loc-depth (car ls)) 1))))
+                                    (if (assq 'git (cdr x))
+                                      (assoc-get (cdr (assoc 'git (cdr x))) 'url)
+                                      (uri-resolve (assoc-get (cdr x) 'url) uri-base))
+                                    (if (assq 'git (cdr x)) 'git 'http)
+                                    (* (loc-trust (car ls))
+                                       (or (assoc-get (cdr x) 'trust) 1.0))
+                                    (+ (loc-depth (car ls)) 1))))
                            (cdr repo)))
                         '()))
                    (res (if (valid-repository? repo)
@@ -1301,6 +1463,13 @@
       (string->number (process->string '(csi -p "(##sys#fudge 42)")))
       8))
 
+(define (get-chicken-version cfg)
+  (or (conf-get cfg 'chicken-version)
+      (let* ((version-lst (process->string-list '(csi -version)))
+            (version-line (list-ref version-lst 3))
+            (version (string->number (string (string-ref version-line 8)))))
+        version)))
+
 (define (get-chicken-repo-path)
   (let ((release (string-trim (process->string '(csi -release))
                               char-whitespace?)))
@@ -1312,10 +1481,12 @@
      char-whitespace?)))
 
 (define (get-install-dirs impl cfg)
-  (define (guile-eval expr)
-    (guard (exn (else #f))
-      (process->sexp `(guile -c ,(write-to-string `(write ,expr))))))
   (case impl
+    ((capyscheme)
+     (list
+       (make-path
+         (process->string
+           '(capy -c "(printf \"~a\" (car %load-path))")))))
     ((chibi)
      (let* ((dirs
              (reverse
@@ -1332,7 +1503,8 @@
        (list
         (if (file-exists? dir)  ; repository-path should always exist
             dir
-            (make-path (or (conf-get cfg 'install-prefix)) "lib" impl
+            (make-path (or (conf-get cfg 'install-prefix) "lib")
+                       impl
                        (get-chicken-binary-version cfg))))))
     ((cyclone)
      (let ((dir (let ((lib-path (get-environment-variable "CYCLONE_LIBRARY_PATH")))
@@ -1341,6 +1513,14 @@
                       (string-trim (process->string '(icyc -p "(Cyc-installation-dir 'sld)"))
                                    char-whitespace?)))))
        (list (or dir "/usr/local/share/cyclone/"))))
+    ((gambit)
+     (list (make-path (get-environment-variable "HOME")
+                      ".gambit_userlib")))
+    ((generic)
+     (list (make-path (or (conf-get cfg 'install-prefix)
+                          (cond-expand (windows (get-environment-variable "LOCALAPPDATA"))
+                                       (else "/usr/local"))
+                          "/lib/snow"))))
     ((gauche)
      (list
       (let ((dir (string-trim
@@ -1352,14 +1532,53 @@
             "/usr/local/share/gauche/"))))
     ((guile)
      (let ((path
-            (guile-eval
-             '(string-append (cdr (assq 'pkgdatadir %guile-build-info))
-                             (string (integer->char 47))
-                             (effective-version)))))
+             (guard (exn (else #f))
+               (process->sexp
+                 `(guile -c ,(write-to-string
+                               `(write
+                                  (string-append
+                                    (cdr (assq 'pkgdatadir %guile-build-info))
+                                    (string (integer->char 47))
+                                    (effective-version)))))))))
        (list
-        (if (string? path)
-            path
-            "/usr/local/share/guile/"))))
+         (make-path
+           (or (conf-get cfg 'install-prefix) "")
+           (if (string? path)
+             path
+             "/usr/local/share/guile/")))))
+    ((kawa)
+     (list
+       (make-path
+         (if (conf-get cfg 'install-prefix) (conf-get cfg 'install-prefix) "")
+         (let ((kawa-classpath
+                 (string-split
+                   (process->string
+                     `(kawa -e "(display (get-environment-variable \"CLASSPATH\"))"))
+                   #\:)))
+           (if (or (null? kawa-classpath)
+                   (not (string-suffix? "kawa.jar" (car kawa-classpath))))
+             "/usr/local/share/kawa/lib"
+             (string-copy (car kawa-classpath)
+                          0
+                          (- (string-length (car kawa-classpath)) 8)))))))
+    ((loko)
+     (list "/usr/local/share/r6rs"))
+    ((mit-scheme)
+     (list
+      (make-path
+      (string-trim
+        ;; Get the last line of output because there might be warnings and such
+         (car
+           (reverse
+             (string-split
+               (process->string
+                 '(mit-scheme
+                    --batch-mode --eval
+                    "(display (->namestring (system-library-directory-pathname)))"
+                    --eval "(exit 0)"))
+               #\newline)))
+       char-whitespace?)
+       "libraries")))
     ((larceny)
      (list
       (make-path
@@ -1369,6 +1588,49 @@
                    "(begin (display (getenv \"LARCENY_ROOT\")) (exit))"))
         char-whitespace?)
        "lib/Snow")))
+    ((mosh)
+     (call-with-temp-file "snow-mosh.scm"
+      (lambda (tmp-path out preserve)
+       (with-output-to-file tmp-path
+        (lambda ()
+         (display "(import (scheme base) (scheme write) (mosh config))")
+         (newline)
+         (display "(display (get-config \"library-path\"))")))
+       (list (make-path (process->string `(mosh ,tmp-path)) "lib")))))
+    ((racket)
+     (list
+      (make-path
+       (process->string
+        '(racket -I racket/base -e "(display (find-system-path 'collects-dir))")))))
+    ((sagittarius)
+     (list (make-path
+            (process->string
+             '(sagittarius -I "(sagittarius)" -e "(display (car (load-path))) (exit)")))))
+    ((skint)
+     (list
+       (string-trim
+         (string-trim
+           (process->string
+             '(skint -qe "(begin (import (only (skint hidden) base-library-directory)) (base-library-directory))"))
+           #\newline)
+         #\")))
+    ((stklos)
+     (list (make-path
+            (process->string
+             '(stklos -e "(display (install-path #:libdir))")))))
+    ((tr7)
+     (list (make-path
+            (process->string
+             '(tr7i -c "(import (scheme base) (scheme write) (tr7 misc)) (display (car (scheme-paths)))")))))
+    ((ypsilon)
+      (call-with-temp-file "snow-ypsilon.scm"
+       (lambda (tmp-path out preserve)
+         (with-output-to-file tmp-path
+                              (lambda ()
+                                (display "(import (core))")
+                                (newline)
+                                (display "(display (car (scheme-library-paths)))")))
+         (list (make-path (process->string `(ypsilon --r7rs ,tmp-path)))))))
     (else
      (list (make-path (or (conf-get cfg 'install-prefix) "/usr/local")
                       "share/snow"
@@ -1383,7 +1645,10 @@
                (chibi (eval '(current-module-path) (environment '(chibi))))
                (else (process->sexp
                       '(chibi-scheme -q -p "(current-module-path)"))))))
-            (lib-dir (find (lambda (d) (string-contains d "/lib")) dirs)))
+            (lib-dir (find (lambda (d)
+                             (and (equal? (string-ref d 0) #\/)
+                                  (string-contains d "/lib")))
+                           dirs)))
        (if lib-dir
            (cons lib-dir (delete lib-dir dirs))
            dirs)))
@@ -1415,15 +1680,23 @@
     (let ((lib-path (and (pair? o) (car o)))
           (install-dir (get-install-source-dir impl cfg)))
       (case impl
+        ((capyscheme)
+         (if lib-path
+             `(capy -L ,install-dir -L ,lib-path --script ,file)
+             `(capy -L ,install-dir --script ,file)))
         ((chibi)
          (let ((chibi (string-split (conf-get cfg 'chibi-path "chibi-scheme"))))
            (if lib-path
                `(,@chibi -A ,install-dir -A ,lib-path ,file)
                `(,@chibi -A ,install-dir ,file))))
         ((chicken)
-         (if lib-path
+         (if (= (get-chicken-version cfg) 5)
+           (if lib-path
              `(csi -R r7rs -I ,install-dir -I ,lib-path -s ,file)
-             `(csi -R r7rs -I ,install-dir -s ,file)))
+             `(csi -R r7rs -I ,install-dir -s ,file))
+           (if lib-path
+             `(csi -I ,install-dir -I ,lib-path -s ,file)
+             `(csi -I ,install-dir -s ,file))))
         ((cyclone)
          (if lib-path
              `(icyc -A ,install-dir -A ,lib-path -s ,file)
@@ -1432,6 +1705,13 @@
          (if lib-path
              `(foment -A ,install-dir -A ,lib-path ,file)
              `(foment -A ,install-dir ,file)))
+        ((gambit)
+         (if lib-path
+           `(gsi ,(string->symbol
+                    (string-append "-:r7rs,search=" install-dir "," lib-path))
+                 ,file)
+           `(gsi ,(string->symbol (string-append "-:r7rs,search=" install-dir))
+                 ,file)))
         ((gauche)
          (if lib-path
              `(gosh -A ,install-dir -A ,lib-path ,file)
@@ -1449,11 +1729,49 @@
                  --r7rs --script ,file)
                `(kawa ,(string-append "-Dkawa.import.path=" install-dir)
                       --r7rs --script ,file))))
+        ((loko)
+         (let ((install-dir (path-resolve install-dir (current-directory))))
+           (if lib-path
+               `(loko -std=r7rs --program ,file)
+               `(loko -std=r7rs --program ,file))))
+        ((mit-scheme)
+         (let ((install-dir (path-resolve install-dir (current-directory))))
+           (if lib-path
+               `(mit-scheme --batch-mode --load ,file --eval "(exit 0)")
+               `(mit-scheme --batch-mode --load ,file --eval "(exit 0)"))))
+        ((mosh)
+         (if lib-path
+             `(mosh ,(string-append "--loadpath=" install-dir) --loadpath= ,lib-path ,file)
+             `(mosh ,(string-append "--loadpath=" install-dir) ,file)))
         ((larceny)
          (if lib-path
              `(larceny -r7rs -path ,(string-append install-dir ":" lib-path)
                        -program ,file)
              `(larceny -r7rs -path ,install-dir -program ,file)))
+        ((sagittarius)
+         (if lib-path
+             `(sagittarius -A ,install-dir -A ,lib-path ,file)
+             `(sagittarius -A ,install-dir ,file)))
+        ((racket)
+         (if lib-path
+             `(racket -I r7rs -S ,install-dir -S ,lib-path --script ,file)
+             `(racket -I r7rs -S ,install-dir --script ,file)))
+        ((skint)
+         (if lib-path
+             `(skint -A ,install-dir -A ,lib-path ,file)
+             `(skint -A ,install-dir ,file)))
+        ((stklos)
+         (if lib-path
+             `(stklos -A ,install-dir -A ,lib-path ,file)
+             `(stklos -A ,install-dir ,file)))
+        ((tr7)
+         (if lib-path
+             `(sh -c ,(string-append "TR7_LIB_PATH=" lib-path " tr7i " (if file file "")))
+             `(tr7i ,file)))
+        ((ypsilon)
+         (if lib-path
+             `(ypsilon --sitelib ,install-dir --sitelib ,lib-path ,file)
+             `(ypsilon --sitelib ,install-dir ,file)))
         (else
          #f))))))
 
@@ -1563,7 +1881,7 @@
        (lambda (file acc)
          (cond
           ((and (equal? "meta" (path-extension file))
-                (guard (exn (else #f))
+                (guard (exn (else (warn "read meta failed" exn) #f))
                   (let ((pkg (call-with-input-file file read)))
                     (and (package? pkg)
                          (every file-exists? (package-installed-files pkg))
@@ -1585,13 +1903,66 @@
 
 ;; chibi is not included because chibi is already installed with full
 ;; package information for each builtin library
-(define native-srfi-support
-  '((foment 60)
-    (gauche 0 1 4 5 7 9 11 13 14 19 26 27 29 31 37 42 43 55)
-    (kawa 1 2 13 14 34 37 60 69 95)
-    (larceny 0 1 2 4 5 6 7 8 9 11 13 14 16 17 19 22 23 25 26 27 28 29
-             30 31 37 38 39 41 42 43 45 48 51 54 56 59 60 61 62 63 64
-             66 67 69 71 74 78 86 87 95 96 98)))
+(define (native-srfi-support impl cfg)
+  (letrec*
+    ((max-srfis 500)
+     (srfi-conds '())
+     (gen-srfis-conds
+       (lambda (count)
+         (if (>= count max-srfis)
+           srfi-conds
+           (begin
+             (set! srfi-conds
+               (append srfi-conds
+                       (list (string-append
+                               "  "
+                               "(cond-expand ((or "
+                               (if (or ;; Capyscheme errors if (library ...) form is there
+                                     (equal? impl 'capyscheme)
+                                     ;; Guile errors if library name has a number
+                                     (equal? impl 'guile)
+                                     ;; STklos errors if (library ...) form is there
+                                     (equal? impl 'stklos))
+                               ""
+                               (string-append "(library (srfi " (number->string count) ")) "))
+                             "srfi-" (number->string count) ") "
+                             (number->string count)
+                             ") (else #f))"
+                             (string #\newline)))))
+           (gen-srfis-conds (+ count 1)))))))
+    (gen-srfis-conds 0)
+    (call-with-temp-file
+      "srfi-list.scm"
+      (lambda (tmp-path out preserve)
+        (with-output-to-file
+          tmp-path
+          (lambda ()
+            (display "(import (scheme base) (scheme write) (scheme process-context))")
+            (newline)
+            (newline)
+            (display "(define srfis (list")
+            (newline)
+            (for-each (lambda (srfi-cond)
+                        (display srfi-cond)
+                        (newline))
+                      srfi-conds)
+            (display "))")
+            (newline)
+            (display "(write srfis)")
+            (newline)
+            (display "(newline)")
+            (newline)
+            (display "(exit 0)")))
+        (let* ((cmd (scheme-program-command impl cfg tmp-path))
+               (srfis (filter (lambda (item) item) (process->sexp cmd))))
+          (if (and (not (list? srfis))
+                   (not (yes-or-no?
+                          cfg
+                          "Could not get supported SRFI list for implementation.
+                          Installing SRFI libraries directly or as dependency might
+                          overwrite natively installed SRFI's. Continue?")))
+            `(,impl)
+            `(,impl ,@srfis)))))))
 
 (define native-self-support
   '((kawa base expressions hashtable quaternions reflect regex
@@ -1603,8 +1974,7 @@
             parameter parseopt portutil procedure process redefutil
             regexp reload selector sequence serializer signal singleton
             sortutil stringutil syslog termios test threads time
-            treeutil uvector validator version vport)
-    ))
+            treeutil uvector validator version vport)))
 
 ;; Currently we make assumptions about default installed libraries of
 ;; the form (scheme *), (srfi *) and (<impl> *), but don't make any
@@ -1623,7 +1993,7 @@
              (memq (cadr lib-name) r7rs-small-libraries))
         (and (eq? 'srfi (car lib-name))
              (= 2 (length lib-name))
-             (cond ((assq impl native-srfi-support)
+             (cond ((native-srfi-support impl cfg)
                     => (lambda (x) (memq (cadr lib-name) (cdr x))))
                    ((eq? impl 'chicken)
                     (file-exists?
@@ -1642,25 +2012,57 @@
 
 (define (get-install-source-dir impl cfg)
   (cond
+   ((eq? impl 'capyscheme) (get-install-library-dir impl cfg))
    ((eq? impl 'chicken) (get-install-library-dir impl cfg))
    ((eq? impl 'cyclone) (get-install-library-dir impl cfg))
+   ((eq? impl 'gambit) (get-install-library-dir impl cfg))
+   ((eq? impl 'gauche) (get-install-library-dir impl cfg))
+   ((eq? impl 'generic) (get-install-library-dir impl cfg))
+   ((eq? impl 'guile) (get-install-library-dir impl cfg))
+   ((eq? impl 'kawa) (get-install-library-dir impl cfg))
+   ((eq? impl 'loko) (get-install-library-dir impl cfg))
+   ((eq? impl 'mit-scheme) (get-install-library-dir impl cfg))
+   ((eq? impl 'mosh) (get-install-library-dir impl cfg))
+   ((eq? impl 'racket) (get-install-library-dir impl cfg))
+   ((eq? impl 'sagittarius) (get-install-library-dir impl cfg))
+   ((eq? impl 'skint) (get-install-library-dir impl cfg))
+   ((eq? impl 'stklos) (get-install-library-dir impl cfg))
+   ((eq? impl 'tr7) (get-install-library-dir impl cfg))
+   ((eq? impl 'ypsilon) (get-install-library-dir impl cfg))
    ((conf-get cfg 'install-source-dir))
    ((conf-get cfg 'install-prefix)
     => (lambda (prefix) (make-path prefix "share/snow" impl)))
-   (else (car (get-install-dirs impl cfg)))))
+   (else snow-module-directory)))
 
 (define (get-install-data-dir impl cfg)
   (cond
+   ((eq? impl 'capyscheme) (get-install-library-dir impl cfg))
    ((eq? impl 'chicken) (get-install-library-dir impl cfg))
    ((eq? impl 'cyclone) (get-install-library-dir impl cfg))
+   ((eq? impl 'gambit) (get-install-library-dir impl cfg))
+   ((eq? impl 'gauche) (get-install-library-dir impl cfg))
+   ((eq? impl 'generic) (get-install-library-dir impl cfg))
+   ((eq? impl 'guile) (get-install-library-dir impl cfg))
+   ((eq? impl 'kawa) (get-install-library-dir impl cfg))
+   ((eq? impl 'loko) (get-install-library-dir impl cfg))
+   ((eq? impl 'mit-scheme) (get-install-library-dir impl cfg))
+   ((eq? impl 'mosh) (get-install-library-dir impl cfg))
+   ((eq? impl 'racket) (get-install-library-dir impl cfg))
+   ((eq? impl 'sagittarius) (get-install-library-dir impl cfg))
+   ((eq? impl 'skint) (get-install-library-dir impl cfg))
+   ((eq? impl 'stklos) (get-install-library-dir impl cfg))
+   ((eq? impl 'tr7) (get-install-library-dir impl cfg))
+   ((eq? impl 'ypsilon) (get-install-library-dir impl cfg))
    ((conf-get cfg 'install-data-dir))
    ((conf-get cfg 'install-prefix)
     => (lambda (prefix) (make-path prefix "share/snow" impl)))
-   (else (car (get-install-dirs impl cfg)))))
+   (else snow-module-directory)))
 
 (define (get-install-library-dir impl cfg)
   (cond
    ((conf-get cfg 'install-library-dir))
+   ((eq? impl 'capyscheme)
+    (car (get-install-dirs impl cfg)))
    ((eq? impl 'chicken)
     (cond ((conf-get cfg 'install-prefix)
            => (lambda (prefix)
@@ -1668,11 +2070,39 @@
                            (get-chicken-binary-version cfg))))
           (else
            (car (get-install-dirs impl cfg)))))
+   ((eq? impl 'gauche)
+    (car (get-install-dirs impl cfg)))
+   ((eq? impl 'generic)
+    (car (get-install-dirs impl cfg)))
    ((eq? impl 'cyclone)
+    (car (get-install-dirs impl cfg)))
+   ((eq? impl 'gambit)
+    (car (get-install-dirs impl cfg)))
+   ((eq? impl 'guile)
+    (car (get-install-dirs impl cfg)))
+   ((eq? impl 'kawa)
+    (car (get-install-dirs impl cfg)))
+   ((eq? impl 'loko)
+    (car (get-install-dirs impl cfg)))
+   ((eq? impl 'mit-scheme)
+    (car (get-install-dirs impl cfg)))
+   ((eq? impl 'mosh)
+    (car (get-install-dirs impl cfg)))
+   ((eq? impl 'racket)
+    (car (get-install-dirs impl cfg)))
+   ((eq? impl 'sagittarius)
+    (car (get-install-dirs impl cfg)))
+   ((eq? impl 'skint)
+    (car (get-install-dirs impl cfg)))
+   ((eq? impl 'stklos)
+    (car (get-install-dirs impl cfg)))
+   ((eq? impl 'tr7)
+    (car (get-install-dirs impl cfg)))
+   ((eq? impl 'ypsilon)
     (car (get-install-dirs impl cfg)))
    ((conf-get cfg 'install-prefix)
     => (lambda (prefix) (make-path prefix "lib" impl)))
-   (else (car (get-install-library-dirs impl cfg)))))
+   (else snow-binary-module-directory)))
 
 (define (get-install-binary-dir impl cfg)
   (cond
@@ -1684,7 +2114,6 @@
 (define (get-library-extension impl cfg)
   (or (conf-get cfg 'library-extension)
       (case impl
-        ((gauche kawa) "scm")
         (else "sld"))))
 
 (define (install-with-sudo? cfg path)
@@ -1768,6 +2197,8 @@
           (library-include-files impl cfg (make-path dir library-file)))
          (install-dir (get-install-source-dir impl cfg))
          (install-lib-dir (get-install-library-dir impl cfg)))
+    ;; ensure the install directory exists
+    (create-directory* install-dir)
     ;; install the library file
     (let ((path (make-path install-dir dest-library-file)))
       (install-directory cfg (path-directory path))
@@ -1805,8 +2236,12 @@
          (name (library-name library))
          (library-base (chicken-library-base name))
          (install-dir (get-install-library-dir impl cfg))
-         (so-path (string-append library-base ".so"))
+         (a-path (string-append library-base ".a"))
+         (dest-a-path (make-path install-dir a-path))
+         (link-path (string-append library-base ".link"))
+         (dest-link-path (make-path install-dir link-path))
          (imp-path (string-append library-base ".import.scm"))
+         (so-path (string-append library-base ".so"))
          (dest-so-path (make-path install-dir so-path))
          (dest-imp-path (make-path install-dir imp-path)))
     (install-directory cfg install-dir)
@@ -1814,7 +2249,9 @@
            (string-join (map x->string (drop-right (library-name library) 1))
                         "/")))
       (install-directory cfg (make-path install-dir meta-dir)))
+    (install-file cfg (make-path dir a-path) dest-a-path)
     (install-file cfg (make-path dir so-path) dest-so-path)
+    (install-file cfg (make-path dir link-path) dest-link-path)
     (install-file cfg (make-path dir imp-path) dest-imp-path)
     (list dest-so-path dest-imp-path)))
 
@@ -1832,17 +2269,146 @@
           (cons dest-so-path
                 (default-installer impl cfg library dir)))))
 
+(define (gambit-installer impl cfg library dir)
+  (let* ((library-file (get-library-file cfg library))
+         (install-dir (get-install-library-dir impl cfg))
+         (so-path (string-append (path-strip-extension library-file) ".so"))
+         (dest-so-path (make-path install-dir so-path))
+         (o-path (string-append (path-strip-extension library-file) ".o"))
+         (dest-o-path (make-path install-dir o-path))
+         (installed-files (default-installer impl cfg library dir)))
+    (install-directory cfg (path-directory dest-so-path))
+    (when (file-exists? so-path)
+      (install-file cfg (make-path dir so-path) dest-so-path)
+      (set! installed-files (cons so-path installed-files)))
+    (when (file-exists? o-path)
+      (install-file cfg (make-path dir o-path) dest-o-path)
+      (set! installed-files (cons o-path installed-files)))
+    installed-files))
+
+(define (guile-srfi-fix dest-file)
+  ;; If library is (srfi N) it needs to be (srfi srfi-N) on Guile
+  (if (string-prefix? "srfi/" dest-file)
+    (string-append (string-copy dest-file 0 5)
+                   "srfi-"
+                   (string-copy dest-file 5))
+    dest-file))
+
+(define (guile-installer impl cfg library dir)
+  (let* ((source-scm-file (get-library-file cfg library))
+         (source-go-file (string-append
+                          (library->path cfg library) ".go"))
+         (dest-scm-file
+           (guile-srfi-fix
+             (string-append (library->path cfg library) ".scm")))
+         (dest-go-file
+           (guile-srfi-fix
+             (string-append (library->path cfg library) ".go")))
+         (include-files
+          (library-include-files impl cfg (make-path dir source-scm-file)))
+         (install-dir (get-install-source-dir impl cfg))
+         (install-lib-dir (get-install-library-dir impl cfg)))
+    (let ((scm-path (make-path install-dir dest-scm-file))
+          (go-path (make-path install-lib-dir dest-go-file)))
+      (install-directory cfg (path-directory scm-path))
+      (install-directory cfg (path-directory go-path))
+      (install-file cfg (make-path dir source-scm-file) scm-path)
+      (install-file cfg (make-path dir source-go-file) go-path)
+      ;; install any includes
+      (cons
+       scm-path
+       (append
+        (map
+         (lambda (x)
+           (let ((dest-file (make-path install-dir (path-relative x dir))))
+             (install-directory cfg (path-directory dest-file))
+             (install-file cfg x dest-file)
+             dest-file))
+         include-files)
+        (map
+         (lambda (x)
+           (let* ((so-file (string-append x (cond-expand (macosx ".dylib")
+                                                         (else ".so"))))
+                  (dest-file (make-path install-lib-dir
+                                        (path-relative so-file dir))))
+             (install-directory cfg (path-directory dest-file))
+             (install-file cfg so-file dest-file)
+             dest-file))
+         (library-shared-include-files
+          impl cfg (make-path dir source-scm-file))))))))
+
+(define (kawa-installer impl cfg library dir)
+  (let* ((class-file (path-replace-extension
+                       (get-library-file cfg library) "class"))
+         (source-class-file (make-path dir class-file))
+         (install-dir (get-install-source-dir impl cfg))
+         (dest-class-file (make-path install-dir class-file))
+         (path (make-path install-dir dest-class-file))
+         (installed-files (default-installer impl cfg library dir)))
+    (cond ((file-exists? source-class-file)
+           (install-file cfg source-class-file dest-class-file)
+           (cons dest-class-file installed-files))
+          (else installed-files))))
+
+(define (mit-scheme-installer impl cfg library dir)
+  (let* ((binld-file (path-replace-extension
+                       (get-library-file cfg library) "binld"))
+         (source-binld-file (make-path dir binld-file))
+         (install-dir (get-install-source-dir impl cfg))
+         (dest-binld-file (make-path install-dir binld-file))
+         (installed-files (default-installer impl cfg library dir)))
+    (cond ((file-exists? source-binld-file)
+           (install-file cfg source-binld-file dest-binld-file)
+           (cons binld-file installed-files))
+          (else installed-files))))
+
+;; Racket can only load files with .rkt suffix. So for each library we create
+;; a file that sets language to r7rs and includes the .sld file
+(define (racket-installer impl cfg library dir)
+  (let* ((source-rkt-file
+           (make-path dir
+           (string-append (path-strip-extension (get-library-file cfg library))
+                          ".rkt")))
+         (install-dir (get-install-source-dir impl cfg))
+         (dest-rkt-file
+           (make-path install-dir
+                      (string-append (library->path cfg library) ".rkt")))
+         (path (make-path install-dir dest-rkt-file))
+         (include-filename (string-append
+                             (path-strip-directory (path-strip-extension path))
+                             ".sld"))
+         (installed-files (default-installer impl cfg library dir)))
+    (with-output-to-file
+      source-rkt-file
+      (lambda ()
+        (map display
+             (list "#lang r7rs" #\newline
+                   "(import (scheme base))" #\newline
+                   "(include \"" include-filename "\")" #\newline))))
+    (install-file cfg source-rkt-file dest-rkt-file)
+    (cons dest-rkt-file installed-files)))
+
 ;; installers should return the list of installed files
 (define (lookup-installer installer)
   (case installer
     ((chicken) chicken-installer)
     ((cyclone) cyclone-installer)
+    ((gambit) gambit-installer)
+    ((guile) guile-installer)
+    ((kawa) kawa-installer)
+    ((mit-scheme) mit-scheme-installer)
+    ((racket) racket-installer)
     (else default-installer)))
 
 (define (installer-for-implementation impl cfg)
   (case impl
     ((chicken) 'chicken)
     ((cyclone) 'cyclone)
+    ((gambit) 'gambit)
+    ((guile) 'guile)
+    ((kawa) 'kawa)
+    ((mit-scheme) 'mit-scheme)
+    ((racket) 'racket)
     (else 'default)))
 
 (define (install-library impl cfg library dir)
@@ -1981,17 +2547,44 @@
   (let* ((library-file (make-path dir (get-library-file cfg library)))
          (library-base (chicken-library-base (library-name library)))
          (so-path (make-path dir (string-append library-base ".so")))
+         (o-path (make-path dir (string-append library-base ".o")))
+         (a-path (make-path dir (string-append library-base ".a")))
          (imp-path (string-append library-base ".import.scm")))
     (with-directory
-     dir
-     (lambda ()
-       (let ((res (system 'csc '-R 'r7rs '-X 'r7rs '-s '-J '-o so-path
-                          '-I (path-directory library-file) library-file)))
-         (and (or (and (pair? res) (zero? (cadr res)))
-                  (yes-or-no? cfg "chicken failed to build: "
-                              (library-name library-name)
-                              " - install anyway?"))
-              library))))))
+      dir
+      (lambda ()
+        (let ((res (if (= (get-chicken-version cfg) 5)
+                     (system 'csc '-R 'r7rs '-X 'r7rs '-s '-J '-o so-path
+                             '-I (path-directory library-file) library-file)
+                     (system 'csc '-s '-J '-o so-path
+                             '-I (path-directory library-file) library-file)))
+              (res-static
+                (let* ((result
+                         (if (= (get-chicken-version cfg) 5)
+                           (system 'csc '-R 'r7rs '-X 'r7rs
+                                   '-unit library-base
+                                   '-static '-c '-J '-o o-path
+                                   '-I (path-directory library-file)
+                                   library-file)
+                           (system 'csc '-unit library-base
+                                   '-static '-c '-J '-o o-path
+                                   '-I (path-directory library-file)
+                                   library-file)))
+                       (ar-result (system 'ar 'rcs a-path o-path)))
+                  (and (pair? result)
+                       (zero? (cadr result))
+                       (pair? ar-result)
+                       (zero? (cadr ar-result))))))
+          (and (or res-static
+                   (yes-or-no? cfg "chicken failed to build static library: "
+                               (library-name library-name)
+                               " - install anyway?"))
+               library)
+          (and (or (and (pair? res) (zero? (cadr res)))
+                   (yes-or-no? cfg "chicken failed to build: "
+                               (library-name library-name)
+                               " - install anyway?"))
+               library))))))
 
 (define (cyclone-builder impl cfg library dir)
   (let* ((library-file (make-path dir (get-library-file cfg library)))
@@ -2007,16 +2600,85 @@
                               " - install anyway?"))
               library))))))
 
+(define (gambit-builder impl cfg library dir)
+  (let* ((library-file (get-library-file cfg library))
+         (src-library-file (make-path dir library-file))
+         (library-dir (path-directory src-library-file))
+         (dest-so-file (string-append (library->path cfg library) ".so"))
+         (dest-o-file (string-append (library->path cfg library) ".o"))
+         (dest-dir (path-directory (make-path dir dest-so-file))))
+    ;; ensure the build directory exists
+    (create-directory* dest-dir)
+    (with-directory
+      dir
+      (lambda ()
+        (let ((res (system 'gsc '-o dest-so-file '-dynamic src-library-file)))
+          (and (or (and (pair? res) (zero? (cadr res)))
+                   (yes-or-no? cfg "gambit failed to build .so file: "
+                               (library-name library)
+                               " - install anyway?"))
+               (let ((res (system 'gsc '-o dest-o-file '-obj src-library-file)))
+                 (and (or (and (pair? res) (zero? (cadr res)))
+                          (yes-or-no? cfg "gambit failed to build .o file: "
+                                      (library-name library)
+                                      " - install anyway?"))
+                      library))))))))
+
+(define (guile-builder impl cfg library dir)
+  (let* ((library-file (get-library-file cfg library))
+         (src-library-file (make-path dir library-file))
+         (library-dir (path-directory src-library-file))
+         (dest-library-file
+          (string-append (library->path cfg library) ".go"))
+         (dest-dir
+          (path-directory (make-path dir dest-library-file))))
+    ;; ensure the build directory exists
+    (create-directory* dest-dir)
+    (with-directory
+     dir
+     (lambda ()
+       (and (system 'guild 'compile '-O0 '--r7rs '-o dest-library-file src-library-file)
+            library)))))
+
+(define (kawa-builder impl cfg library dir)
+  (let* ((src-library-file (make-path dir (get-library-file cfg library)))
+         (res (system 'kawa
+                      (string-append "-Dkawa.import.path="
+                                     (car (get-install-dirs impl cfg)))
+                      '-d dir
+                      '-C src-library-file)))
+    (and (or (and (pair? res) (zero? (cadr res)))
+             (yes-or-no? cfg ".class file failed to build: "
+                         (library-name library)
+                         " - install anyway?"))
+         library)))
+
+(define (mit-scheme-builder impl cfg library dir)
+  (let* ((src-library-file (make-path dir (get-library-file cfg library)))
+         (res (system 'mit-scheme
+                      '--batch-mode
+                      '--eval (string-append "(sf \"" src-library-file "\")")
+                      '--eval "(exit 0)")))
+    (and (or (and (pair? res) (zero? (cadr res)))
+             (yes-or-no? cfg "native-code files failed to build: "
+                         (library-name library)
+                         " - install anyway?"))
+         library)))
+
 (define (lookup-builder builder)
   (case builder
     ((chibi) chibi-builder)
     ((chicken) chicken-builder)
-    ((cyclone) cyclone-builder) 
+    ((cyclone) cyclone-builder)
+    ((gambit) gambit-builder)
+    ((guile) guile-builder)
+    ((kawa) kawa-builder)
+    ((mit-scheme) mit-scheme-builder)
     (else default-builder)))
 
 (define (builder-for-implementation impl cfg)
   (case impl
-    ((chibi chicken cyclone) impl)
+    ((chibi chicken cyclone gambit guile kawa mit-scheme) impl)
     (else 'default)))
 
 (define (build-library impl cfg library dir)
@@ -2051,8 +2713,10 @@
     (with-directory
      dir
      (lambda ()
-       (let ((res (system 'csc '-R 'r7rs '-X 'r7rs
-                          '-I (path-directory path) path)))
+       (let ((res (if (= (get-chicken-version cfg) 5)
+                    (system 'csc '-R 'r7rs '-X 'r7rs
+                            '-I (path-directory path) path)
+                    (system 'csc '-I (path-directory path) path))))
          (and (or (and (pair? res) (zero? (cadr res)))
                   (yes-or-no? cfg "chicken failed to build: "
                               path " - install anyway?"))
@@ -2112,7 +2776,8 @@
          (install-dir (get-install-data-dir impl cfg))
          (dest (path-resolve dest0 install-dir)))
     (create-directory* (path-directory dest))
-    (install-file cfg (make-path dir src) dest)))
+    (install-file cfg (make-path dir src) dest)
+    dest))
 
 (define (fetch-package cfg url)
   (resource->bytevector cfg url))
@@ -2130,7 +2795,7 @@
          res)))
 
 (define (package-maybe-digest-mismatches impl cfg pkg raw)
-  (and (not (conf-get cfg 'ignore-digests?))
+  (and (not (conf-get cfg 'ignore-digest?))
        (let ((res (package-digest-mismatches cfg pkg raw)))
          (and res
               (not (yes-or-no? cfg "Package checksum mismatches: " res
@@ -2220,10 +2885,80 @@
         (snowball (maybe-gunzip (file->bytevector file))))
     (install-package-from-snowball repo impl cfg pkg snowball)))
 
+(define (git-fetch-package repo cfg pkg)
+  (call-with-temp-dir
+    "snow-fort-pkg-git-clone"
+    (lambda (dir preserve)
+      (let* ((git-tag (package-git-tag pkg))
+             (git-branch (cond ((equal? git-tag 'HEAD) `())
+                               (git-tag `(--branch ,git-tag))
+                               (else `())))
+             (new-cfg
+               (conf-extend cfg `((version . ,(package-version pkg))
+                                  (author . ,(package-author repo pkg))
+                                  (maintainer . ,(package-maintainer repo pkg)))))
+             (git-hash
+               (let ((hash (package-git-hash pkg)))
+                 (when
+                   (and (not hash)
+                        (not (yes-or-no? new-cfg
+                                         "Git hash missing.\nProceed anyway?")))
+                   (die 2 "Git hash missing" pkg))
+                 hash))
+             (git-commands
+               (cond (git-tag `((git clone
+                                     ,(package-git-url pkg)
+                                     ,dir
+                                     ,@git-branch
+                                     --depth=1)))
+                     (git-hash
+                       `((git clone
+                              ,(package-git-url pkg)
+                              ,dir)
+                         (git -C
+                              ,dir
+                              checkout
+                              ,git-hash)))
+                     (else
+                       `((git clone
+                              ,(package-git-url pkg)
+                              ,dir)))))
+             (git-outputs
+               (let ((outputs (map process->output+error+status git-commands)))
+                 (when (not (= (list-ref (list-ref outputs 0) 2) 0))
+                   (error "Git clone failed" outputs))))
+             (cloned-hash (read-line
+                            (open-input-string
+                              (process->string `(git -C ,dir rev-parse HEAD)))))
+             (libs
+               (map (lambda (lib)
+                      (make-path dir
+                                 (string-append (library->path cfg lib) ".sld")))
+                    (package-libraries pkg)))
+             (spec '())
+             (spec+files (package-spec+files new-cfg spec libs)))
+        (when (and git-hash
+                   (not (string=? cloned-hash git-hash))
+                   (not (yes-or-no? new-cfg
+                                    "Package git hash did not match.\n"
+                                    "Proceed anyway?")))
+          (die 2 "Git hash did not match" pkg))
+        (create-package (car spec+files) (cdr spec+files) dir)))))
+
 (define (install-package repo impl cfg pkg)
   (cond
    ((maybe-invalid-package-reason impl cfg pkg)
     => (lambda (x) (die 2 "package invalid: " x)))
+   ((package-git-url pkg)
+    => (lambda (url)
+         (let* ((raw (git-fetch-package repo cfg pkg))
+                (snowball (maybe-gunzip raw)))
+           (install-package-from-snowball repo
+                                          impl
+                                          (conf-extend cfg
+                                                       '((ignore-digest? . #t)))
+                                          pkg
+                                          snowball))))
    ((package-url repo pkg)
     => (lambda (url)
          (let* ((raw (fetch-package cfg url))

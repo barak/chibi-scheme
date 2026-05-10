@@ -354,32 +354,42 @@
 (test '(list 3 4) (quasiquote (list (unquote (+ 1 2)) 4)) )
 (test `(list ,(+ 1 2) 4) (quasiquote (list (unquote (+ 1 2)) 4)))
 
-(define plus
+(define any-arity
   (case-lambda 
-   (() 0)
-   ((x) x)
-   ((x y) (+ x y))
-   ((x y z) (+ (+ x y) z))
-   (args (apply + args))))
+    (() 'zero)
+    ((x) x)
+    ((x y) (cons x y))
+    ((x y z) (list x y z))
+    (args (cons 'many args))))
 
-(test 0 (plus))
-(test 1 (plus 1))
-(test 3 (plus 1 2))
-(test 6 (plus 1 2 3))
-(test 10 (plus 1 2 3 4))
+(test 'zero (any-arity))
+(test 1 (any-arity 1))
+(test '(1 . 2) (any-arity 1 2))
+(test '(1 2 3) (any-arity 1 2 3))
+(test '(many 1 2 3 4) (any-arity 1 2 3 4))
 
-(define mult
+(define rest-arity
   (case-lambda 
-   (() 1)
-   ((x) x)
-   ((x y) (* x y))
-   ((x y . z) (apply mult (* x y) z))))
+    (() '(zero))
+    ((x) (list 'one x))
+    ((x y) (list 'two x y))
+    ((x y . z) (list 'more x y z))))
 
-(test 1 (mult))
-(test 1 (mult 1))
-(test 2 (mult 1 2))
-(test 6 (mult 1 2 3))
-(test 24 (mult 1 2 3 4))
+(test '(zero) (rest-arity))
+(test '(one 1) (rest-arity 1))
+(test '(two 1 2) (rest-arity 1 2))
+(test '(more 1 2 (3)) (rest-arity 1 2 3))
+
+(define dead-clause
+  (case-lambda
+    ((x . y) 'many)
+    (() 'none)
+    (foo 'unreachable)))
+
+(test 'none (dead-clause))
+(test 'many (dead-clause 1))
+(test 'many (dead-clause 1 2))
+(test 'many (dead-clause 1 2 3))
 
 (test-end)
 
@@ -798,6 +808,7 @@
 (test #f (< +nan.0 0.0))
 (test #f (> +nan.0 0.0))
 (test '(#t #f) (list (<= 1 1 2) (<= 2 1 3)))
+(test #f (= 9007199254740992.0 9007199254740993))
 
 ;; From R7RS 6.2.6 Numerical operations:
 ;;
@@ -888,8 +899,17 @@
 (test -1 (- 3 4))
 (test -6 (- 3 4 5))
 (test -3 (- 3))
+(test -3/2 (- 3/2))
+(test -3/2-i (- 3/2+i))
 (test 3/20 (/ 3 4 5))
 (test 1/3 (/ 3))
+
+(test 1073741824 (/ -1073741824 -1))
+(test 1073741824 (quotient -1073741824 -1))
+(test 0 (remainder -1073741824 -1))
+(test 4611686018427387904 (/ -4611686018427387904 -1))
+(test 4611686018427387904 (quotient -4611686018427387904 -1))
+(test 0 (remainder -4611686018427387904 -1))
 
 (test 7 (abs -7))
 (test 7 (abs 7))
@@ -994,6 +1014,7 @@
 (test 3.0 (inexact (sqrt 9)))
 (test 1.4142135623731 (sqrt 2))
 (test 0.0+1.0i (inexact (sqrt -1)))
+(test 0.0+1.0i (sqrt -1.0-0.0i))
 
 (test '(2 0) (call-with-values (lambda () (exact-integer-sqrt 4)) list))
 (test '(2 1) (call-with-values (lambda () (exact-integer-sqrt 5)) list))
@@ -1024,6 +1045,7 @@
 (test 100 (string->number "100"))
 (test 256 (string->number "100" 16))
 (test 100.0 (string->number "1e2"))
+(test #f (string->number "1 2"))
 
 (test-end)
 

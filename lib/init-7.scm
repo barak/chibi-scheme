@@ -1,5 +1,5 @@
 ;; init-7.scm -- core library procedures for R7RS
-;; Copyright (c) 2009-2019 Alex Shinn.  All rights reserved.
+;; Copyright (c) 2009-2021 Alex Shinn.  All rights reserved.
 ;; BSD-style license: http://synthcode.com/license.txt
 
 (define (caar x) (car (car x)))
@@ -60,19 +60,27 @@
   (define (map1 proc ls res)
     (if (pair? ls)
         (map1 proc (cdr ls) (cons (proc (car ls)) res))
-        (reverse res)))
+        (if (null? ls)
+            (reverse res)
+            (error "map: improper list" ls))))
   (define (mapn proc lol res)
     (if (every pair? lol)
         (mapn proc
               (map1 cdr lol '())
               (cons (apply proc (map1 car lol '())) res))
-        (reverse res)))
+        (if (every (lambda (x) (if (null? x) #t (pair? x))) lol)
+            (reverse res)
+            (error "map: improper list in list" lol))))
   (if (null? lol)
       (map1 proc ls '())
       (mapn proc (cons ls lol) '())))
 
 (define (for-each f ls . lol)
-  (define (for1 f ls) (if (pair? ls) (begin (f (car ls)) (for1 f (cdr ls)))))
+  (define (for1 f ls)
+    (if (pair? ls)
+        (begin (f (car ls)) (for1 f (cdr ls)))
+        (if (not (null? ls))
+            (error "for-each: improper list" ls))))
   (if (null? lol) (for1 f ls) (begin (apply map f ls lol) (if #f #f))))
 
 (define (any pred ls . lol)
@@ -102,8 +110,6 @@
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;; syntax
 
-(current-renamer (lambda (x) x))
-
 (define close-syntax
   (lambda (form env)
     (make-syntactic-closure env '() form)))
@@ -127,53 +133,22 @@
        '()))
     rename))
 
-(define make-transformer
-  (lambda (transformer)
-    (lambda (expr use-env mac-env)
-      ((lambda (old-use-env old-mac-env old-renamer)
-         (current-usage-environment use-env)
-         (current-transformer-environment mac-env)
-         (current-renamer (make-renamer mac-env))
-         ((lambda (result)
-            (current-usage-environment old-use-env)
-            (current-transformer-environment old-mac-env)
-            (current-renamer old-renamer)
-            result)
-          (transformer expr)))
-       (current-usage-environment)
-       (current-transformer-environment)
-       (current-renamer)))))
-
-(%define-syntax define-syntax
-  (lambda (expr use-env mac-env)
-    (list (close-syntax '%define-syntax mac-env)
-          (cadr expr)
-          (list (close-syntax 'make-transformer mac-env)
-                (car (cddr expr))))))
-
-(define free-identifier=?
-  (lambda (x y)
-    ((lambda (use-env cur-env)
-       (identifier=? (if use-env use-env cur-env) x
-                     (if use-env use-env cur-env) y))
-     (current-usage-environment)
-     (current-environment))))
-
 (define sc-macro-transformer
   (lambda (f)
-    (lambda (expr)
-      (close-syntax (f expr (current-usage-environment))
-                    (current-transformer-environment)))))
+    (lambda (expr use-env mac-env)
+      (close-syntax (f expr use-env) mac-env))))
 
 (define rsc-macro-transformer
   (lambda (f)
-    (lambda (expr)
-      (f expr (current-transformer-environment)))))
+    (lambda (expr use-env mac-env)
+      (f expr mac-env))))
 
 (define er-macro-transformer
   (lambda (f)
-    (lambda (expr)
-      (f expr (current-renamer) free-identifier=?))))
+    (lambda (expr use-env mac-env)
+      (f expr
+         (make-renamer mac-env)
+         (lambda (x y) (identifier=? use-env x use-env y))))))
 
 (define-syntax cond
   (er-macro-transformer
@@ -233,7 +208,8 @@
                      (qq (cadr x) (- d 1)))))
           ((compare (rename 'unquote-splicing) (car x))
            (if (<= d 0)
-               (list (rename 'cons) (qq (car x) d) (qq (cdr x) d))
+               (list (rename 'cons-source) (qq (car x) d) (qq (cdr x) d)
+                     (list (rename 'quote) x))
                (list (rename 'list) (list (rename 'quote) 'unquote-splicing)
                      (qq (cadr x) (- d 1)))))
           ((compare (rename 'quasiquote) (car x))
@@ -277,7 +253,10 @@
                                             ,@(cdr (cddr expr)))))
                        (,(cadr expr) ,@vars)))
                      ,@vals)
-                   `((,(rename 'lambda) ,vars ,@(cddr expr)) ,@vals)))
+                   ((lambda (res)
+                      (pair-source-set! res (pair-source expr))
+                      res)
+                    `((,(rename 'lambda) ,vars ,@(cddr expr)) ,@vals))))
              (map car bindings)
              (map cadr bindings))
             (error "bad let syntax" expr)))
@@ -326,7 +305,7 @@
                           (,(rename 'quote) ,(caar ls)))
            ,(body (cdar ls))
            ,(clause (cdr ls))))))
-     `(let ((,(rename 'tmp) ,(cadr expr)))
+     `(,(rename 'let) ((,(rename 'tmp) ,(cadr expr)))
         ,(clause (cddr expr))))))
 
 (define-syntax do
@@ -894,12 +873,13 @@
     (define ellipsis (if ellipsis-specified? (cadr expr) (rename '...)))
     (define lits (if ellipsis-specified? (car (cddr expr)) (cadr expr)))
     (define forms (if ellipsis-specified? (cdr (cddr expr)) (cddr expr)))
+    (define full-match? (any (lambda (x) (not (pair? (car x)))) forms))
     (define (next-symbol s)
       (set! count (+ count 1))
       (rename (string->symbol (string-append s (%number->string count)))))
     (define (expand-pattern pat tmpl)
-      (let lp ((p (cdr pat))
-               (x (list _cdr _expr))
+      (let lp ((p (if full-match? pat (cdr pat)))
+               (x (if full-match? _expr (list _cdr _expr)))
                (dim 0)
                (vars '())
                (k (lambda (vars)
@@ -1097,7 +1077,11 @@
              _or
              (append
               (map
-               (lambda (clause) (expand-pattern (car clause) (cadr clause)))
+               (lambda (clause)
+                 (if (and (list? clause) (= (length clause) 2))
+                     (expand-pattern (car clause) (cadr clause))
+                     (error "invalid syntax-rules clause, which must be of the form (pattern template) (note fenders are not supported)"
+                            clause)))
                forms)
               (list
                (list _cons
@@ -1112,16 +1096,6 @@
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;; let(rec)-syntax and datum->syntax
-
-(define-syntax let-syntax
-  (syntax-rules ()
-    ((let-syntax ((keyword transformer) ...) . body)
-     (%let-syntax ((keyword (make-transformer transformer)) ...) . body))))
-
-(define-syntax letrec-syntax
-  (syntax-rules ()
-    ((letrec-syntax ((keyword transformer) ...) . body)
-     (%letrec-syntax ((keyword (make-transformer transformer)) ...) . body))))
 
 (define (symbol->identifier id symbol)
   (cond
@@ -1173,8 +1147,11 @@
      (let ((var (if (pair? tmp) (car tmp) default))
            (tmp2 (if (pair? tmp) (cdr tmp) '())))
        (let-optionals* tmp2 rest . body)))
+    ((let-optionals* tmp (var . rest) . body)
+     (let ((var (car tmp)))
+       (let-optionals* (cdr tmp) rest . body)))
     ((let-optionals* tmp tail . body)
-     (let ((tail tmp)) . body))))
+     (let ((tail (list-copy tmp))) . body))))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;; exceptions

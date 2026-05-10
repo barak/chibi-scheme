@@ -1,5 +1,5 @@
 /*  sexp.h -- header for sexp library                         */
-/*  Copyright (c) 2009-2015 Alex Shinn.  All rights reserved. */
+/*  Copyright (c) 2009-2022 Alex Shinn.  All rights reserved. */
 /*  BSD-style license: http://synthcode.com/license.txt       */
 
 #ifndef SEXP_H
@@ -7,7 +7,7 @@
 
 #ifdef __cplusplus
 extern "C" {
-#define SEXP_FLEXIBLE_ARRAY [1]
+#define SEXP_FLEXIBLE_ARRAY [SEXP_FLEXIBLE_ARRAY_SIZE]
 #else
 #define SEXP_FLEXIBLE_ARRAY []
 #endif
@@ -81,8 +81,11 @@ typedef long long off_t;
 #define TOSTRING(x) STRINGIFY(x)
 #define exit(x)           exits(TOSTRING(x))
 #define fabsl          fabs
+#define M_PI           3.141592653589793
 #define M_LN10         2.30258509299404568402  /* log_e 10 */
 #define FLT_RADIX 2
+#define NAN NaN()
+#define INFINITY Inf(1)
 #define isfinite(x) !(isNaN(x) || isInf(x,0))
 typedef u32int uint32_t;
 typedef s32int int32_t;
@@ -231,9 +234,15 @@ typedef int sexp_sint_t;
 #define sexp_heap_align(n) sexp_align(n, 5)
 #define sexp_heap_chunks(n) (sexp_heap_align(n)>>5)
 #elif SEXP_64_BIT
+#if PLAN9
+typedef uintptr sexp_tag_t;
+typedef uintptr sexp_uint_t;
+typedef intptr sexp_sint_t;
+#else
 typedef unsigned int sexp_tag_t;
 typedef unsigned long sexp_uint_t;
 typedef long sexp_sint_t;
+#endif
 #define SEXP_PRIdFIXNUM "ld"
 #define sexp_heap_align(n) sexp_align(n, 5)
 #define sexp_heap_chunks(n) (sexp_heap_align(n)>>5)
@@ -244,6 +253,13 @@ typedef int sexp_sint_t;
 #define SEXP_PRIdFIXNUM "d"
 #define sexp_heap_align(n) sexp_align(n, 5)
 #define sexp_heap_chunks(n) (sexp_heap_align(n)>>5)
+#elif PLAN9
+typedef uintptr sexp_tag_t;
+typedef unsigned int sexp_uint_t;
+typedef int sexp_sint_t;
+#define SEXP_PRIdFIXNUM "d"
+#define sexp_heap_align(n) sexp_align(n, 4)
+#define sexp_heap_chunks(n) (sexp_heap_align(n)>>4)
 #else
 typedef unsigned short sexp_tag_t;
 typedef unsigned int sexp_uint_t;
@@ -257,10 +273,15 @@ typedef int sexp_sint_t;
 #define SEXP_PROC_NONE ((sexp_uint_t)0)
 #define SEXP_PROC_VARIADIC ((sexp_uint_t)1)
 #define SEXP_PROC_UNUSED_REST ((sexp_uint_t)2)
+#define SEXP_PROC_VARIABLE_TRANSFORMER ((sexp_uint_t)4)
 
 
 #ifdef SEXP_USE_INTTYPES
+#ifdef PLAN9
+#include <ape/stdint.h>
+#else
 #include <stdint.h>
+#endif
 # ifdef UINT8_MAX
 #  define SEXP_UINT8_DEFINED 1
 typedef uint8_t  sexp_uint8_t;
@@ -276,7 +297,11 @@ typedef int32_t sexp_int32_t;
 # else
 # include <limits.h>
 # if SEXP_USE_UNIFORM_VECTOR_LITERALS
+# ifdef PLAN9
+# include <ape/stdint.h>
+# else
 # include <stdint.h>
+# endif
 # endif
 # endif
 # if UCHAR_MAX == 255
@@ -373,8 +398,8 @@ struct sexp_gc_var_t {
   struct sexp_gc_var_t *next;
 };
 
-struct sexp_library_entry_t {   /* for static builds */
-  const char *name;
+struct sexp_library_entry_t {   /* for static builds and user exported C */
+  const char *name;             /* libaries */
   sexp_init_proc init;
 };
 
@@ -420,6 +445,7 @@ struct sexp_struct {
   unsigned int freep:1;
   unsigned int brokenp:1;
   unsigned int syntacticp:1;
+  unsigned int copyonwritep:1;
 #if SEXP_USE_TRACK_ALLOC_SOURCE
   const char* source;
   void* backtrace[SEXP_BACKTRACE_SIZE];
@@ -438,11 +464,9 @@ struct sexp_struct {
     } pair;
     struct {
       sexp_uint_t length;
-      sexp data SEXP_FLEXIBLE_ARRAY;
     } vector;
     struct {
       sexp_uint_t length;
-      char data SEXP_FLEXIBLE_ARRAY;
     } bytes;
     struct {
       sexp bytes;
@@ -455,18 +479,19 @@ struct sexp_struct {
       sexp charlens;
 #endif
       sexp_uint_t length;
-      char data SEXP_FLEXIBLE_ARRAY;
 #else
       sexp bytes;
 #if SEXP_USE_STRING_INDEX_TABLE
       sexp charlens;
+#elif SEXP_USE_STRING_REF_CACHE
+      sexp_uint_t cached_char_idx;
+      sexp cached_cursor;
 #endif
       sexp_uint_t offset, length;
 #endif
     } string;
     struct {
       sexp_uint_t length;
-      char data SEXP_FLEXIBLE_ARRAY;
     } symbol;
     struct {
       sexp name;
@@ -484,12 +509,11 @@ struct sexp_struct {
       sexp_sint_t fd, count;
     } fileno;
     struct {
-      sexp kind, message, irritants, procedure, source;
+      sexp kind, message, irritants, procedure, source, stack_trace;
     } exception;
     struct {
       signed char sign;
       sexp_uint_t length;
-      sexp_uint_t data SEXP_FLEXIBLE_ARRAY;
     } bignum;
     struct {
       sexp numerator, denominator;
@@ -501,7 +525,6 @@ struct sexp_struct {
       sexp parent;
       sexp_uint_t length;
       void *value;
-      char body SEXP_FLEXIBLE_ARRAY;
     } cpointer;
     /* runtime types */
     struct {
@@ -513,11 +536,10 @@ struct sexp_struct {
     struct {
       sexp name, literals, source;
       sexp_uint_t length, max_depth;
-      unsigned char data SEXP_FLEXIBLE_ARRAY;
     } bytecode;
     struct {
       sexp bc, vars;
-      char flags;
+      char flags;  /* a boxed fixnum truncated to char */
       sexp_proc_num_args_t num_args;
     } procedure;
     struct {
@@ -557,7 +579,6 @@ struct sexp_struct {
     /* compiler state */
     struct {
       sexp_uint_t length, top;
-      sexp data SEXP_FLEXIBLE_ARRAY;
     } stack;
     struct {
       sexp stack, env, parent, child,
@@ -756,9 +777,11 @@ void* sexp_alloc(sexp ctx, size_t size);
 #define sexp_markedp(x)          ((x)->markedp)
 #define sexp_flags(x)            ((x)->flags)
 #define sexp_immutablep(x)       ((x)->immutablep)
+#define sexp_mutablep(x)         (!(x)->immutablep)
 #define sexp_freep(x)            ((x)->freep)
 #define sexp_brokenp(x)          ((x)->brokenp)
 #define sexp_pointer_magic(x)    ((x)->magic)
+#define sexp_copy_on_writep(x)   ((x)->copyonwritep)
 
 #if SEXP_USE_TRACK_ALLOC_SOURCE
 #define sexp_pointer_source(x)   ((x)->source)
@@ -773,11 +796,12 @@ void* sexp_alloc(sexp ctx, size_t size);
 
 #define sexp_isa(a, b) (sexp_pointerp(a) && sexp_typep(b) && (sexp_pointer_tag(a) == sexp_type_tag(b)))
 
-#if SEXP_USE_IMMEDIATE_FLONUMS
 union sexp_flonum_conv {
   float flonum;
   unsigned int bits;
 };
+
+#if SEXP_USE_IMMEDIATE_FLONUMS
 #define sexp_flonump(x)      (((sexp_uint_t)(x) & SEXP_EXTENDED_MASK) == SEXP_IFLONUM_TAG)
 SEXP_API sexp sexp_flonum_predicate (sexp ctx, sexp x);
 #if SEXP_64_BIT
@@ -858,6 +882,8 @@ SEXP_API sexp sexp_make_flonum(sexp ctx, double f);
 #define sexp_s32vectorp(x)  (sexp_uvectorp(x) && sexp_uvector_type(x)==SEXP_S32)
 #define sexp_u64vectorp(x)  (sexp_uvectorp(x) && sexp_uvector_type(x)==SEXP_U64)
 #define sexp_s64vectorp(x)  (sexp_uvectorp(x) && sexp_uvector_type(x)==SEXP_S64)
+#define sexp_f8vectorp(x)   (sexp_uvectorp(x) && sexp_uvector_type(x)==SEXP_F8)
+#define sexp_f16vectorp(x)  (sexp_uvectorp(x) && sexp_uvector_type(x)==SEXP_F16)
 #define sexp_f32vectorp(x)  (sexp_uvectorp(x) && sexp_uvector_type(x)==SEXP_F32)
 #define sexp_f64vectorp(x)  (sexp_uvectorp(x) && sexp_uvector_type(x)==SEXP_F64)
 #define sexp_c64vectorp(x)  (sexp_uvectorp(x) && sexp_uvector_type(x)==SEXP_C64)
@@ -873,6 +899,8 @@ SEXP_API sexp sexp_make_flonum(sexp ctx, double f);
 #define sexp_s32vectorp(x)  (sexp_vectorp(x))
 #define sexp_u64vectorp(x)  (sexp_vectorp(x))
 #define sexp_s64vectorp(x)  (sexp_vectorp(x))
+#define sexp_f8vectorp(x)   (sexp_vectorp(x))
+#define sexp_f16vectorp(x)  (sexp_vectorp(x))
 #define sexp_f32vectorp(x)  (sexp_vectorp(x))
 #define sexp_f64vectorp(x)  (sexp_vectorp(x))
 #define sexp_c64vectorp(x)  (sexp_vectorp(x))
@@ -1025,11 +1053,14 @@ SEXP_API sexp sexp_make_unsigned_integer(sexp ctx, sexp_luint_t x);
 #define sexp_negativep(x) (sexp_exact_negativep(x) ||                   \
                            (sexp_flonump(x) && sexp_flonum_value(x) < 0))
 #define sexp_positivep(x) (!(sexp_negativep(x)))
-#define sexp_pedantic_negativep(x) (sexp_exact_negativep(x) ||          \
-                                    (sexp_flonump(x) &&                 \
-                                     ((sexp_flonum_value(x) < 0) ||     \
-                                      (sexp_flonum_value(x) == 0 && \
-                                       1.0 / sexp_flonum_value(x) < 0))))
+#define sexp_pedantic_negativep(x) (                 \
+  sexp_exact_negativep(x) ||                         \
+  (sexp_ratiop(x) &&                                 \
+   sexp_exact_negativep(sexp_ratio_numerator(x))) || \
+  (sexp_flonump(x) &&                                \
+   ((sexp_flonum_value(x) < 0) ||                    \
+    (sexp_flonum_value(x) == 0 &&                    \
+     1.0 / sexp_flonum_value(x) < 0))))
 
 #if SEXP_USE_BIGNUMS
 #define sexp_oddp(x) (sexp_fixnump(x) ? sexp_unbox_fixnum(x) & 1 : \
@@ -1051,11 +1082,19 @@ SEXP_API sexp sexp_make_unsigned_integer(sexp ctx, sexp_luint_t x);
 #define sexp_negate_flonum(x) sexp_flonum_value(x) = -(sexp_flonum_value(x))
 #endif
 
+/* TODO: Doesn't support x == SEXP_MIN_FIXNUM. */
 #define sexp_negate(x)                                  \
   if (sexp_flonump(x))                                  \
     sexp_negate_flonum(x);                              \
   else                                                  \
     sexp_negate_exact(x)
+
+#define sexp_negate_maybe_ratio(x)                      \
+  if (sexp_ratiop(x)) {                                 \
+    sexp_negate_exact(sexp_ratio_numerator(x));         \
+  } else {                                              \
+    sexp_negate(x);                                     \
+  }
 
 #if SEXP_USE_FLONUMS || SEXP_USE_BIGNUMS
 
@@ -1089,6 +1128,13 @@ SEXP_API unsigned long long sexp_bignum_to_uint(sexp x);
 #define sexp_flonum_eqv(x, y) (sexp_flonum_value(x) == sexp_flonum_value(y))
 #endif
 
+#if SEXP_USE_MINI_FLOAT_UNIFORM_VECTORS
+SEXP_API double sexp_quarter_to_double(unsigned char q);
+SEXP_API unsigned char sexp_double_to_quarter(double f);
+SEXP_API double sexp_half_to_double(unsigned short x);
+SEXP_API unsigned short sexp_double_to_half(double x);
+#endif
+
 /*************************** field accessors **************************/
 
 #if SEXP_USE_SAFE_ACCESSORS
@@ -1107,8 +1153,11 @@ SEXP_API unsigned long long sexp_bignum_to_uint(sexp x);
 #define sexp_cpointer_field(x, field) ((x)->value.cpointer.field)
 #endif
 
+#define sexp_flexible_array_field(x, type, field_type) \
+  ((field_type*)((char*)(x)+sexp_sizeof(type)))
+
 #define sexp_vector_length(x) (sexp_field(x, vector, SEXP_VECTOR, length))
-#define sexp_vector_data(x)   (sexp_field(x, vector, SEXP_VECTOR, data))
+#define sexp_vector_data(x)   sexp_flexible_array_field(x, vector, sexp)
 
 #if SEXP_USE_SAFE_VECTOR_ACCESSORS
 #define sexp_vector_ref(x,i)   (sexp_unbox_fixnum(i)>=0 && sexp_unbox_fixnum(i)<sexp_vector_length(x) ? sexp_vector_data(x)[sexp_unbox_fixnum(i)] : (fprintf(stderr, "vector-ref length out of range %s on line %d: vector %p (length %lu): %ld\n", __FILE__, __LINE__, x, sexp_vector_length(x), sexp_unbox_fixnum(i)), SEXP_VOID))
@@ -1122,17 +1171,18 @@ SEXP_API unsigned long long sexp_bignum_to_uint(sexp x);
 #define sexp_procedure_flags(x)      (sexp_field(x, procedure, SEXP_PROCEDURE, flags))
 #define sexp_procedure_variadic_p(x) (sexp_unbox_fixnum(sexp_procedure_flags(x)) & SEXP_PROC_VARIADIC)
 #define sexp_procedure_unused_rest_p(x) (sexp_unbox_fixnum(sexp_procedure_flags(x)) & SEXP_PROC_UNUSED_REST)
+#define sexp_procedure_variable_transformer_p(x) (sexp_unbox_fixnum(sexp_procedure_flags(x)) & SEXP_PROC_VARIABLE_TRANSFORMER)
 #define sexp_procedure_code(x)       (sexp_field(x, procedure, SEXP_PROCEDURE, bc))
 #define sexp_procedure_vars(x)       (sexp_field(x, procedure, SEXP_PROCEDURE, vars))
 #define sexp_procedure_source(x)     sexp_bytecode_source(sexp_procedure_code(x))
 
 #define sexp_bytes_length(x)  (sexp_field(x, bytes, SEXP_BYTES, length))
-#define sexp_bytes_data(x)    (sexp_field(x, bytes, SEXP_BYTES, data))
+#define sexp_bytes_data(x)   sexp_flexible_array_field(x, bytes, char)
 #define sexp_bytes_maybe_null_data(x) (sexp_not(x) ? NULL : sexp_bytes_data(x))
 
 static const unsigned char sexp_uvector_sizes[] = {
-  0, 1, 8, 8, 16, 16, 32, 32, 64, 64, 32, 64, 64, 128};
-static const unsigned char sexp_uvector_chars[] = "#ususususuffcc";
+  0, 1, 8, 8, 16, 16, 32, 32, 64, 64, 32, 64, 64, 128, 8, 16};
+static const unsigned char sexp_uvector_chars[] = "#ususususuffccff";
 
 enum sexp_uniform_vector_type {
   SEXP_NOT_A_UNIFORM_TYPE,
@@ -1148,7 +1198,10 @@ enum sexp_uniform_vector_type {
   SEXP_F32,
   SEXP_F64,
   SEXP_C64,
-  SEXP_C128
+  SEXP_C128,
+  SEXP_F8,
+  SEXP_F16,
+  SEXP_END_OF_UNIFORM_TYPES
 };
 
 #define sexp_uvector_freep(x) (sexp_freep(x))
@@ -1167,12 +1220,16 @@ enum sexp_uniform_vector_type {
 #define sexp_string_size(x)     (sexp_field(x, string, SEXP_STRING, length))
 #define sexp_string_charlens(x) (sexp_field(x, string, SEXP_STRING, charlens))
 #if SEXP_USE_PACKED_STRINGS
-#define sexp_string_data(x)   (sexp_field(x, string, SEXP_STRING, data))
+#define sexp_string_data(x)   sexp_flexible_array_field(x, string, char)
 #define sexp_string_bytes(x)  (x)
 #else
 #define sexp_string_bytes(x)  (sexp_field(x, string, SEXP_STRING, bytes))
 #define sexp_string_offset(x) (sexp_field(x, string, SEXP_STRING, offset))
 #define sexp_string_data(x)   (sexp_bytes_data(sexp_string_bytes(x))+sexp_string_offset(x))
+#endif
+#if SEXP_USE_STRING_REF_CACHE
+#define sexp_cached_char_idx(x) (sexp_field(x, string, SEXP_STRING, cached_char_idx))
+#define sexp_cached_cursor(x) (sexp_field(x, string, SEXP_STRING, cached_cursor))
 #endif
 #define sexp_string_maybe_null_data(x) (sexp_not(x) ? NULL : sexp_string_data(x))
 
@@ -1185,7 +1242,7 @@ enum sexp_uniform_vector_type {
 #define sexp_bytes_ref(x, i)    (sexp_make_fixnum((unsigned char)sexp_bytes_data(x)[sexp_unbox_fixnum(i)]))
 #define sexp_bytes_set(x, i, v) (sexp_bytes_data(x)[sexp_unbox_fixnum(i)] = sexp_unbox_fixnum(v))
 
-#define sexp_lsymbol_data(x)   (sexp_field(x, symbol, SEXP_SYMBOL, data))
+#define sexp_lsymbol_data(x)   sexp_flexible_array_field(x, symbol, char)
 #define sexp_lsymbol_length(x) (sexp_field(x, symbol, SEXP_SYMBOL, length))
 
 #define sexp_port_stream(p)     (sexp_pred_field(p, port, sexp_portp, stream))
@@ -1223,6 +1280,7 @@ enum sexp_uniform_vector_type {
 #define sexp_exception_irritants(x) (sexp_field(x, exception, SEXP_EXCEPTION, irritants))
 #define sexp_exception_procedure(x) (sexp_field(x, exception, SEXP_EXCEPTION, procedure))
 #define sexp_exception_source(x)    (sexp_field(x, exception, SEXP_EXCEPTION, source))
+#define sexp_exception_stack_trace(x) (sexp_field(x, exception, SEXP_EXCEPTION, stack_trace))
 
 #define sexp_trampolinep(x) (sexp_exceptionp(x) && sexp_exception_kind(x) == SEXP_TRAMPOLINE)
 #define sexp_trampoline_procedure(x) sexp_exception_procedure(x)
@@ -1231,7 +1289,6 @@ enum sexp_uniform_vector_type {
 
 #define sexp_cpointer_freep(x)      (sexp_freep(x))
 #define sexp_cpointer_length(x)     (sexp_cpointer_field(x, length))
-#define sexp_cpointer_body(x)       (sexp_cpointer_field(x, body))
 #define sexp_cpointer_parent(x)     (sexp_cpointer_field(x, parent))
 #define sexp_cpointer_value(x)      (sexp_cpointer_field(x, value))
 #define sexp_cpointer_maybe_null_value(x) (sexp_not(x) ? NULL : sexp_cpointer_value(x))
@@ -1241,7 +1298,7 @@ enum sexp_uniform_vector_type {
 #define sexp_bytecode_name(x)     (sexp_field(x, bytecode, SEXP_BYTECODE, name))
 #define sexp_bytecode_literals(x) (sexp_field(x, bytecode, SEXP_BYTECODE, literals))
 #define sexp_bytecode_source(x)   (sexp_field(x, bytecode, SEXP_BYTECODE, source))
-#define sexp_bytecode_data(x)     (sexp_field(x, bytecode, SEXP_BYTECODE, data))
+#define sexp_bytecode_data(x)     sexp_flexible_array_field(x, bytecode, unsigned char)
 
 #define sexp_env_cell_syntactic_p(x)   ((x)->syntacticp)
 
@@ -1331,7 +1388,7 @@ enum sexp_uniform_vector_type {
 
 #define sexp_stack_length(x)  (sexp_field(x, stack, SEXP_STACK, length))
 #define sexp_stack_top(x)     (sexp_field(x, stack, SEXP_STACK, top))
-#define sexp_stack_data(x)    (sexp_field(x, stack, SEXP_STACK, data))
+#define sexp_stack_data(x)    sexp_flexible_array_field(x, stack, sexp)
 
 #define sexp_promise_donep(x) (sexp_field(x, promise, SEXP_PROMISE, donep))
 #define sexp_promise_value(x) (sexp_field(x, promise, SEXP_PROMISE, value))
@@ -1476,7 +1533,7 @@ SEXP_API sexp sexp_symbol_table[SEXP_SYMBOL_TABLE_SIZE];
 
 #define sexp_bignum_sign(x)            (sexp_field(x, bignum, SEXP_BIGNUM, sign))
 #define sexp_bignum_length(x)          (sexp_field(x, bignum, SEXP_BIGNUM, length))
-#define sexp_bignum_data(x)            (sexp_field(x, bignum, SEXP_BIGNUM, data))
+#define sexp_bignum_data(x)            sexp_flexible_array_field(x, bignum, sexp_uint_t)
 
 /****************************** arithmetic ****************************/
 
@@ -1650,6 +1707,16 @@ sexp sexp_finalize_dl (sexp ctx, sexp self, sexp_sint_t n, sexp dl);
 #define sexp_current_source_param
 #endif
 
+/* To export a library from the embedding C program to Scheme, so    */
+/* that it can be included into Scheme library foo/qux.sld as        */
+/* (include-shared "bar"), libraries should contain the entry        */
+/* {"foo/bar", init_bar}.  The signature and function of init_bar is */
+/* the same as that of sexp_init_library in shared libraries.  The   */
+/* array libraries must be terminated with {NULL, NULL} and must     */
+/* remain valid throughout its use by Chibi.                         */
+
+SEXP_API void sexp_add_static_libraries(struct sexp_library_entry_t* libraries);
+
 SEXP_API sexp sexp_alloc_tagged_aux(sexp ctx, size_t size, sexp_uint_t tag sexp_current_source_param);
 SEXP_API sexp sexp_make_context(sexp ctx, size_t size, size_t max_size);
 SEXP_API sexp sexp_cons_op(sexp ctx, sexp self, sexp_sint_t n, sexp head, sexp tail);
@@ -1726,14 +1793,18 @@ SEXP_API sexp sexp_lookup_type_op (sexp ctx, sexp self, sexp_sint_t n, sexp name
 SEXP_API sexp sexp_open_input_string_op (sexp ctx, sexp self, sexp_sint_t n, sexp str);
 SEXP_API sexp sexp_open_output_string_op (sexp ctx, sexp self, sexp_sint_t n);
 SEXP_API sexp sexp_get_output_string_op (sexp ctx, sexp self, sexp_sint_t n, sexp port);
+SEXP_API sexp sexp_make_immutable_op (sexp ctx, sexp self, sexp_sint_t n, sexp x);
 SEXP_API sexp sexp_make_exception (sexp ctx, sexp kind, sexp message, sexp irritants, sexp procedure, sexp source);
 SEXP_API sexp sexp_user_exception (sexp ctx, sexp self, const char *msg, sexp x);
+SEXP_API sexp sexp_user_exception_ls (sexp ctx, sexp self, const char *msg, int n, ...);
 SEXP_API sexp sexp_file_exception (sexp ctx, sexp self, const char *msg, sexp x);
 SEXP_API sexp sexp_type_exception (sexp ctx, sexp self, sexp_uint_t type_id, sexp x);
 SEXP_API sexp sexp_xtype_exception (sexp ctx, sexp self, const char *msg, sexp x);
 SEXP_API sexp sexp_range_exception (sexp ctx, sexp obj, sexp start, sexp end);
+SEXP_API sexp sexp_get_stack_trace (sexp ctx);
 SEXP_API sexp sexp_print_exception_op (sexp ctx, sexp self, sexp_sint_t n, sexp exn, sexp out);
 SEXP_API sexp sexp_stack_trace_op (sexp ctx, sexp self, sexp_sint_t n, sexp out);
+SEXP_API sexp sexp_print_exception_stack_trace_op (sexp ctx, sexp self, sexp_sint_t n, sexp exn, sexp out);
 SEXP_API sexp sexp_apply (sexp context, sexp proc, sexp args);
 SEXP_API sexp sexp_apply1 (sexp ctx, sexp f, sexp x);
 SEXP_API sexp sexp_apply2 (sexp ctx, sexp f, sexp x, sexp y);
@@ -1759,7 +1830,7 @@ SEXP_API int sexp_write_utf8_char (sexp ctx, int c, sexp out);
 #define sexp_string_ref(ctx, s, i)    (sexp_string_utf8_index_ref(ctx, NULL, 2, s, i))
 #define sexp_string_set(ctx, s, i, ch) (sexp_string_utf8_index_set(ctx, NULL, 3, s, i, ch))
 #define sexp_string_cursor_ref(ctx, s, i)    (sexp_string_utf8_ref(ctx, s, i))
-#define sexp_string_cursor_set(ctx, s, i)    (sexp_string_utf8_set(ctx, s, i))
+#define sexp_string_cursor_set(ctx, s, i, ch)    (sexp_string_utf8_set(ctx, s, i, ch))
 #define sexp_string_cursor_next(s, i) sexp_make_string_cursor(sexp_unbox_string_cursor(i) + sexp_utf8_initial_byte_count(((unsigned char*)sexp_string_data(s))[sexp_unbox_string_cursor(i)]))
 #define sexp_string_cursor_prev(s, i) sexp_make_string_cursor(sexp_string_utf8_prev((unsigned char*)sexp_string_data(s)+sexp_unbox_string_cursor(i)) - sexp_string_data(s))
 #define sexp_string_length(s) sexp_string_utf8_length((unsigned char*)sexp_string_data(s), sexp_string_size(s))
@@ -1868,6 +1939,7 @@ SEXP_API int sexp_poll_port(sexp ctx, sexp port, int inputp);
 #define sexp_read(ctx, in) sexp_read_op(ctx, NULL, 1, in)
 #define sexp_write(ctx, obj, out) sexp_write_op(ctx, NULL, 2, obj, out)
 #define sexp_print_exception(ctx, e, out) sexp_print_exception_op(ctx, NULL, 2, e, out)
+#define sexp_print_exception_stack_trace(ctx, e, out) sexp_print_exception_stack_trace_op(ctx, NULL, 2, e, out)
 #define sexp_flush_output(ctx, out) sexp_flush_output_op(ctx, NULL, 1, out)
 #define sexp_equalp(ctx, a, b) sexp_equalp_op(ctx, NULL, 2, a, b)
 #define sexp_listp(ctx, x) sexp_listp_op(ctx, NULL, 1, x)

@@ -167,16 +167,19 @@
   ;; location
   (if (%parse-stream-tail s)
       (parse-stream-debug-info (%parse-stream-tail s) i)
-      (let* ((line-info
-              (parse-stream-count-lines s (parse-stream-max-char s)))
-             (line (+ (parse-stream-line s) (car line-info)))
-             (col (if (zero? (car line-info))
-                      (+ (parse-stream-column s) (cadr line-info))
-                      (cadr line-info)))
-             (from (car (cddr line-info)))
-             (to (parse-stream-end-of-line s (+ from 1)))
-             (str (parse-stream-substring s from s to)))
-        (list line col str))))
+      (let ((max-char (parse-stream-max-char s)))
+        (if (< max-char 0)
+            (list 0 0 "")
+            (let* ((line-info
+                    (parse-stream-count-lines s max-char))
+                   (line (+ (parse-stream-line s) (car line-info)))
+                   (col (if (zero? (car line-info))
+                            (+ (parse-stream-column s) (cadr line-info))
+                            (cadr line-info)))
+                   (from (car (cddr line-info)))
+                   (to (parse-stream-end-of-line s (+ from 1)))
+                   (str (parse-stream-substring s from s to)))
+              (list line col str))))))
 
 (define (parse-stream-next-source source i)
   (if (>= (+ i 1) (vector-length (parse-stream-buffer source)))
@@ -399,7 +402,9 @@
    ((null? (cdr o))
     (let ((f (car o)))
       (lambda (s i sk fk)
-        (f s i (lambda (r s i fk) (sk (list r) s i fk)) fk))))
+        (f s i (lambda (r s i fk)
+                 (sk (if (eq? r ignored-value) '() (list r)) s i fk))
+           fk))))
    (else
     (let* ((f (car o))
            (o (cdr o))
@@ -408,7 +413,10 @@
            (g (if (pair? o)
                   (apply parse-seq g o)
                   (lambda (s i sk fk)
-                    (g s i (lambda (r s i fk) (sk (list r) s i fk)) fk)))))
+                    (g s i (lambda (r s i fk)
+                             (sk (if (eq? r ignored-value) '() (list r))
+                                 s i fk))
+                       fk)))))
       (lambda (source index sk fk)
         (f source
            index
@@ -515,10 +523,15 @@
 
 ;;> Parse with \var{f} once, keep the first result, and commit to the
 ;;> current parse path, discarding any prior backtracking options.
+;;> Since prior backtracking options are discarded, prior failure
+;;> continuations are also not used. By default, \scheme{#f} is
+;;> returned on failure, a custom failure continuation can be passed
+;;> as the second argument.
 
-(define (parse-commit f)
-  (lambda (source index sk fk)
-    (f source index (lambda (res s i fk) (sk res s i (lambda (s i r) #f))) fk)))
+(define (parse-commit f . o)
+  (let ((commit-fk (if (pair? o) (car o) (lambda (s i r) #f))))
+    (lambda (source index sk fk)
+      (f source index (lambda (res s i fk) (sk res s i commit-fk)) fk))))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
@@ -658,7 +671,7 @@
 (define (parse-string str)
   (parse-map (parse-with-failure-reason
               (parse-seq-list (map parse-char (string->list str)))
-              `(expected ,str))
+              (string-append "expected '" str "'"))
              list->string))
 
 ;;> Parse a sequence of characters matching \var{x} as with

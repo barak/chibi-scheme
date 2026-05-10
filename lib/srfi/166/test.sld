@@ -66,12 +66,13 @@
       (test "3.14" (show #f (with ((precision 2)) 3.14)))
       (test "3.00" (show #f (with ((precision 2)) 3.)))
       (test "1.10" (show #f (with ((precision 2)) 1.099)))
-      (test "0.00" (show #f (with ((precision 2)) 1e-17)))
+      (test "1.00e-17" (show #f (with ((precision 2)) 1e-17)))
       (test "0.0000000010" (show #f (with ((precision 10)) 1e-9)))
-      (test "0.0000000000" (show #f (with ((precision 10)) 1e-17)))
+      (test "1.0000000000e-17" (show #f (with ((precision 10)) 1e-17)))
       (test "0.000004" (show #f (with ((precision 6)) 0.000004)))
       (test "0.0000040" (show #f (with ((precision 7)) 0.000004)))
       (test "0.00000400" (show #f (with ((precision 8)) 0.000004)))
+      (test "-6.0371e-06" (show #f (with ((precision 4)) -6.0371e-06)))
       (test "1.00" (show #f (with ((precision 2)) .997554209949891)))
       (test "1.00" (show #f (with ((precision 2)) .99755420)))
       (test "1.00" (show #f (with ((precision 2)) .99755)))
@@ -210,6 +211,15 @@
       (test "1.1" (show #f (numeric #i9/8 10 1)))
       (test "1" (show #f (numeric #i9/8 10 0)))
 
+      (test "1.0"
+          (show #f (with ((precision 1)) 0.999999999999876)))
+      (test "10.0"
+          (show #f (with ((precision 1)) 9.999999999999876)))
+      (test "10.0"
+          (show #f (numeric 9.999999999999876 10 1)))
+      (test "10.00"
+          (show #f (numeric 9.999999999999876 10 2)))
+
       ;; precision-show, base-4
       (test "1.1230" (show #f (numeric 91/64 4 4)))
       (test "1.123" (show #f (numeric 91/64 4 3)))
@@ -279,6 +289,9 @@
       (test "12.3µm" (show #f (numeric/si 1.23e-5 1000) "m")) ;?
       (test "1.2µm" (show #f (numeric/si 1.23e-6 1000) "m"))
       (test "1.2 µm" (show #f (numeric/si 1.23e-6 1000 " ") "m"))
+      (test "0" (show #f (numeric/si 0)))
+      (test "-608" (show #f (numeric/si -608)))
+      (test "-4k" (show #f (numeric/si -3986)))
 
       (test "1,234,567" (show #f (numeric/comma 1234567)))
       (test "1,234,567" (show #f (numeric/comma 1234567 3)))

@@ -53,9 +53,11 @@
 
 (define (read-float-tail in acc)
   (let lp ((res acc) (k 0.1))
-    (let ((ch (read-char in)))
+    (let ((ch (peek-char in)))
       (cond ((or (eof-object? ch) (char-delimiter? ch)) res)
-            ((char-numeric? ch) (lp (+ res (* k (char-digit ch))) (* k 0.1)))
+            ((char-numeric? ch)
+             (read-char in)
+             (lp (+ res (* k (char-digit ch))) (* k 0.1)))
             (else (error "invalid numeric syntax"))))))
 
 (define (read-number in acc base)
@@ -67,7 +69,7 @@
        ((eqv? #\. ch)
         (read-char in)
         (if (= base 10)
-            (begin (read-char in) (read-float-tail in (inexact acc)))
+            (read-float-tail in (inexact acc))
             (error "non-base-10 floating point")))
        (else (error "invalid numeric syntax"))))))
 

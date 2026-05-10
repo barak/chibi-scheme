@@ -158,6 +158,10 @@ sexp sexp_write_uvector(sexp ctx, sexp self, sexp_sint_t n, sexp obj, sexp write
     case SEXP_S64: sexp_write(ctx, tmp=sexp_make_integer(ctx, ((int64_t*)str)[i]), out); break;
     case SEXP_U64: sexp_write(ctx, tmp=sexp_make_unsigned_integer(ctx, ((uint64_t*)str)[i]), out); break;
 #if SEXP_USE_FLONUMS
+#if SEXP_USE_MINI_FLOAT_UNIFORM_VECTORS
+    case SEXP_F8: sexp_flonum_value_set(f, sexp_quarter_to_double(((unsigned char*)str)[i])); sexp_write(ctx, f, out); break;
+    case SEXP_F16: sexp_flonum_value_set(f, sexp_half_to_double(((unsigned short*)str)[i])); sexp_write(ctx, f, out); break;
+#endif
     case SEXP_F32: sexp_flonum_value_set(f, ((float*)str)[i]); sexp_write(ctx, f, out); break;
     case SEXP_F64: sexp_flonum_value_set(f, ((double*)str)[i]); sexp_write(ctx, f, out); break;
 #endif
@@ -264,7 +268,7 @@ static struct sexp_type_struct _sexp_type_specs[] = {
 #else
   {(sexp)"String", SEXP_FALSE, SEXP_FALSE, SEXP_FALSE, SEXP_FALSE, SEXP_FALSE, NULL, NULL, NULL, SEXP_STRING, sexp_offsetof(string, bytes), 1, 1+SEXP_USE_STRING_INDEX_TABLE, 0, 0, sexp_sizeof(string), 0, 0, 0, 0, 0, 0, 0, 0, NULL},
 #endif
-  {(sexp)"Vector", SEXP_FALSE, SEXP_FALSE, SEXP_FALSE, SEXP_FALSE, SEXP_FALSE, NULL, NULL, NULL, SEXP_VECTOR, sexp_offsetof(vector, data), 0, 0, sexp_offsetof(vector, length), 1, sexp_sizeof(vector), sexp_offsetof(vector, length), sizeof(sexp), 0, 0, 0, 0, 0, 0, NULL},
+  {(sexp)"Vector", SEXP_FALSE, SEXP_FALSE, SEXP_FALSE, SEXP_FALSE, SEXP_FALSE, NULL, NULL, NULL, SEXP_VECTOR, sexp_sizeof(vector), 0, 0, sexp_offsetof(vector, length), 1, sexp_sizeof(vector), sexp_offsetof(vector, length), sizeof(sexp), 0, 0, 0, 0, 0, 0, NULL},
   {(sexp)"Flonum", SEXP_FALSE, SEXP_FALSE, SEXP_FALSE, SEXP_FALSE, SEXP_FALSE, NULL, NULL, NULL, SEXP_FLONUM, 0, 0, 0, 0, 0, sexp_sizeof(flonum), 0, 0, 0, 0, 0, 0, 0, 0, NULL},
   {(sexp)"Bignum", SEXP_FALSE, SEXP_FALSE, SEXP_FALSE, SEXP_FALSE, SEXP_FALSE, NULL, NULL, NULL, SEXP_BIGNUM, 0, 0, 0, 0, 0, sexp_sizeof(bignum), sexp_offsetof(bignum, length), sizeof(sexp_uint_t), 0, 0, 0, 0, 0, 0, NULL},
 #if SEXP_USE_STABLE_ABI || SEXP_USE_RATIOS
@@ -279,11 +283,11 @@ static struct sexp_type_struct _sexp_type_specs[] = {
   {(sexp)"Input-Port", SEXP_FALSE, SEXP_FALSE, SEXP_FALSE, SEXP_FALSE, SEXP_FALSE, NULL, NULL, SEXP_FINALIZE_PORTN, SEXP_IPORT, sexp_offsetof(port, name), 3, 3, 0, 0, sexp_sizeof(port), 0, 0, 0, 0, 0, 0, 0, 0, SEXP_FINALIZE_PORT},
   {(sexp)"Output-Port", SEXP_FALSE, SEXP_FALSE, SEXP_FALSE, SEXP_FALSE, SEXP_FALSE, NULL, NULL, SEXP_FINALIZE_PORTN, SEXP_OPORT, sexp_offsetof(port, name), 3, 3, 0, 0, sexp_sizeof(port), 0, 0, 0, 0, 0, 0, 0, 0, SEXP_FINALIZE_PORT},
   {(sexp)"File-Descriptor", SEXP_FALSE, SEXP_FALSE, SEXP_FALSE, SEXP_FALSE, SEXP_FALSE, NULL, NULL, SEXP_FINALIZE_FILENON, SEXP_FILENO, 0, 0, 0, 0, 0, sexp_sizeof(fileno), 0, 0, 0, 0, 0, 0, 0, 0, SEXP_FINALIZE_FILENO},
-  {(sexp)"Exception", SEXP_FALSE, SEXP_FALSE, SEXP_FALSE, SEXP_FALSE, SEXP_FALSE, (sexp)sexp_write_simple_object, NULL, NULL, SEXP_EXCEPTION, sexp_offsetof(exception, kind), 5, 5, 0, 0, sexp_sizeof(exception), 0, 0, 0, 0, 0, 0, 0, 0, NULL},
+  {(sexp)"Exception", SEXP_FALSE, SEXP_FALSE, SEXP_FALSE, SEXP_FALSE, SEXP_FALSE, (sexp)sexp_write_simple_object, NULL, NULL, SEXP_EXCEPTION, sexp_offsetof(exception, kind), 6, 6, 0, 0, sexp_sizeof(exception), 0, 0, 0, 0, 0, 0, 0, 0, NULL},
   {(sexp)"Procedure", SEXP_FALSE, SEXP_FALSE, SEXP_FALSE, SEXP_FALSE, SEXP_FALSE, NULL, NULL, NULL, SEXP_PROCEDURE, sexp_offsetof(procedure, bc), 2, 2, 0, 0, sexp_sizeof(procedure), 0, 0, 0, 0, 0, 0, 0, 0, NULL},
   {(sexp)"Macro", SEXP_FALSE, SEXP_FALSE, SEXP_FALSE, SEXP_FALSE, SEXP_FALSE, NULL, NULL, NULL, SEXP_MACRO, sexp_offsetof(macro, proc), 4, 4, 0, 0, sexp_sizeof(macro), 0, 0, 0, 0, 0, 0, 0, 0, NULL},
   {(sexp)"Sc", SEXP_FALSE, SEXP_FALSE, SEXP_FALSE, SEXP_FALSE, SEXP_FALSE, (sexp)sexp_write_simple_object, NULL, NULL, SEXP_SYNCLO, sexp_offsetof(synclo, env), 4, 4, 0, 0, sexp_sizeof(synclo), 0, 0, 0, 0, 0, 0, 0, 0, NULL},
-  {(sexp)"Environment", SEXP_FALSE, SEXP_FALSE, SEXP_FALSE, SEXP_FALSE, SEXP_FALSE, NULL, NULL, NULL, SEXP_ENV, sexp_offsetof(env, parent), 3+SEXP_USE_RENAME_BINDINGS, 3+SEXP_USE_RENAME_BINDINGS, 0, 0, sexp_sizeof(env), 0, 0, 0, 0, 0, 0, 0, 0, NULL},
+  {(sexp)"Environment", SEXP_FALSE, SEXP_FALSE, SEXP_FALSE, SEXP_FALSE, SEXP_FALSE, NULL, NULL, NULL, SEXP_ENV, sexp_offsetof(env, parent), 3+(SEXP_USE_STABLE_ABI||SEXP_USE_RENAME_BINDINGS), 3+(SEXP_USE_STABLE_ABI||SEXP_USE_RENAME_BINDINGS), 0, 0, sexp_sizeof(env), 0, 0, 0, 0, 0, 0, 0, 0, NULL},
   {(sexp)"Bytecode", SEXP_FALSE, SEXP_FALSE, SEXP_FALSE, SEXP_FALSE, SEXP_FALSE, NULL, NULL, NULL, SEXP_BYTECODE, sexp_offsetof(bytecode, name), 3, 3, 0, 0, sexp_sizeof(bytecode), offsetof(struct sexp_struct, value.bytecode.length), 1, 0, 0, 0, 0, 0, 0, NULL},
   {(sexp)"Core-Form", SEXP_FALSE, SEXP_FALSE, SEXP_FALSE, SEXP_FALSE, SEXP_FALSE, NULL, NULL, NULL, SEXP_CORE, sexp_offsetof(core, name), 1, 1, 0, 0, sexp_sizeof(core), 0, 0, 0, 0, 0, 0, 0, 0, NULL},
 #if SEXP_USE_STABLE_ABI || SEXP_USE_DL
@@ -297,7 +301,7 @@ static struct sexp_type_struct _sexp_type_specs[] = {
   {(sexp)"Set-Syn!", SEXP_FALSE, SEXP_FALSE, SEXP_FALSE, SEXP_FALSE, SEXP_FALSE, (sexp)sexp_write_simple_object, NULL, NULL, SEXP_SET_SYN, sexp_offsetof(set_syn, var), 3, 3, 0, 0, sexp_sizeof(set_syn), 0, 0, 0, 0, 0, 0, 0, 0, NULL},
   {(sexp)"Seq", SEXP_FALSE, SEXP_FALSE, SEXP_FALSE, SEXP_FALSE, SEXP_FALSE, (sexp)sexp_write_simple_object, NULL, NULL, SEXP_SEQ, sexp_offsetof(seq, ls), 2, 2, 0, 0, sexp_sizeof(seq), 0, 0, 0, 0, 0, 0, 0, 0, NULL},
   {(sexp)"Lit", SEXP_FALSE, SEXP_FALSE, SEXP_FALSE, SEXP_FALSE, SEXP_FALSE, (sexp)sexp_write_simple_object, NULL, NULL, SEXP_LIT, sexp_offsetof(lit, value), 2, 2, 0, 0, sexp_sizeof(lit), 0, 0, 0, 0, 0, 0, 0, 0, NULL},
-  {(sexp)"Stack", SEXP_FALSE, SEXP_FALSE, SEXP_FALSE, SEXP_FALSE, SEXP_FALSE, NULL, NULL, NULL, SEXP_STACK, sexp_offsetof(stack, data), 0, 0, sexp_offsetof(stack, top), 1, sexp_sizeof(stack), offsetof(struct sexp_struct, value.stack.length), sizeof(sexp), 0, 0, 0, 0, 0, 0, NULL},
+  {(sexp)"Stack", SEXP_FALSE, SEXP_FALSE, SEXP_FALSE, SEXP_FALSE, SEXP_FALSE, NULL, NULL, NULL, SEXP_STACK, sexp_sizeof(stack), 0, 0, sexp_offsetof(stack, top), 1, sexp_sizeof(stack), offsetof(struct sexp_struct, value.stack.length), sizeof(sexp), 0, 0, 0, 0, 0, 0, NULL},
   {(sexp)"Context", SEXP_FALSE, SEXP_FALSE, SEXP_FALSE, SEXP_FALSE, SEXP_FALSE, NULL, NULL, NULL, SEXP_CONTEXT, sexp_offsetof(context, stack), 12+(SEXP_USE_STABLE_ABI||SEXP_USE_DL), 12+(SEXP_USE_STABLE_ABI||SEXP_USE_DL), 0, 0, sexp_sizeof(context), 0, 0, 0, 0, 0, 0, 0, 0, NULL},
   {(sexp)"Cpointer", SEXP_FALSE, SEXP_FALSE, SEXP_FALSE, SEXP_FALSE, SEXP_FALSE, NULL, NULL, NULL, SEXP_CPOINTER, sexp_offsetof(cpointer, parent), 1, 0, 0, 0, sexp_sizeof(cpointer), sexp_offsetof(cpointer, length), 1, 0, 0, 0, 0, 0, 0, NULL},
 #if SEXP_USE_STABLE_ABI || SEXP_USE_UNIFORM_VECTOR_LITERALS
@@ -460,7 +464,12 @@ sexp sexp_finalize_c_type (sexp ctx, sexp self, sexp_sint_t n, sexp obj) {
 /****************************** contexts ******************************/
 
 static const char* sexp_initial_features[] = {
+#ifdef sexp_architecture
+  sexp_architecture,
+#endif
+#ifdef sexp_platform
   sexp_platform,
+#endif
 #if SEXP_BSD
   "bsd",
 #endif
@@ -500,6 +509,9 @@ static const char* sexp_initial_features[] = {
 #if SEXP_USE_STRING_INDEX_TABLE
   "string-index",
 #endif
+#if SEXP_USE_STRING_REF_CACHE
+  "string-ref-cache",
+#endif
 #if SEXP_USE_GREEN_THREADS
   "threads",
 #endif
@@ -512,6 +524,9 @@ static const char* sexp_initial_features[] = {
 #if SEXP_USE_UNIFORM_VECTOR_LITERALS
   "uvector",
 #endif
+#if SEXP_USE_MINI_FLOAT_UNIFORM_VECTORS
+  "mini-float",
+#endif
 #if SEXP_USE_COMPLEX
   "complex",
 #endif
@@ -519,6 +534,7 @@ static const char* sexp_initial_features[] = {
   "ratios",
 #endif
   "r7rs",
+  "chibi-" sexp_version,
   "chibi",
   NULL,
 };
@@ -731,6 +747,7 @@ sexp sexp_make_exception (sexp ctx, sexp kind, sexp message, sexp irritants,
   sexp_exception_irritants(exn) = irritants;
   sexp_exception_procedure(exn) = procedure;
   sexp_exception_source(exn) = source;
+  sexp_exception_stack_trace(exn) = SEXP_FALSE;
   return exn;
 }
 
@@ -755,6 +772,22 @@ sexp sexp_user_exception (sexp ctx, sexp self, const char *ms, sexp ir) {
                              ? ir : (irr = sexp_list1(ctx, ir))),
                             self, SEXP_FALSE);
   sexp_gc_release3(ctx);
+  return res;
+}
+
+sexp sexp_user_exception_ls (sexp ctx, sexp self, const char *msg, int n, ...) {
+  int i;
+  va_list ap;
+  sexp_gc_var2(res, ir);
+  sexp_gc_preserve2(ctx, res, ir);
+  va_start(ap, n);
+  for (i=0, ir=SEXP_NULL; i < n; ++i) {
+    ir = sexp_cons(ctx, va_arg(ap, sexp), ir);
+  }
+  ir = sexp_nreverse(ctx, ir);
+  res = sexp_user_exception(ctx, self, msg, ir);
+  sexp_gc_release2(ctx);
+  va_end(ap);
   return res;
 }
 
@@ -1158,7 +1191,7 @@ sexp sexp_make_uvector_op(sexp ctx, sexp self, sexp_sint_t n, sexp elt_type, sex
     return sexp_make_bytes(ctx, len, SEXP_ZERO);
   sexp_assert_type(ctx, sexp_fixnump, SEXP_FIXNUM, elt_type);
   sexp_assert_type(ctx, sexp_fixnump, SEXP_FIXNUM, len);
-  if (etype < SEXP_U1 || etype > SEXP_C128)
+  if (etype < SEXP_U1 || etype >= SEXP_END_OF_UNIFORM_TYPES)
     return sexp_xtype_exception(ctx, self, "unknown uniform vector type", elt_type);
   if (elen < 0)
     return sexp_xtype_exception(ctx, self, "negative length", len);
@@ -1237,8 +1270,12 @@ sexp sexp_string_index_to_cursor (sexp ctx, sexp self, sexp_sint_t n, sexp str, 
   sexp_sint_t* chunklens;
   sexp_sint_t chunk;
 #endif
+  sexp cursor;
   sexp_sint_t i, j, limit;
   unsigned char *p;
+#if SEXP_USE_STRING_REF_CACHE
+  unsigned char *q;
+#endif
   sexp_assert_type(ctx, sexp_stringp, SEXP_STRING, str);
   sexp_assert_type(ctx, sexp_fixnump, SEXP_FIXNUM, index);
   p = (unsigned char*)sexp_string_data(str);
@@ -1255,12 +1292,37 @@ sexp sexp_string_index_to_cursor (sexp ctx, sexp self, sexp_sint_t n, sexp str, 
       i -= (chunk+1) * SEXP_STRING_INDEX_TABLE_CHUNK_SIZE;
     }
   }
+#elif SEXP_USE_STRING_REF_CACHE
+  if (i > (sexp_cached_char_idx(str) + ((sexp_string_length(str) - sexp_cached_char_idx(str)) >> 1))) {
+    j = sexp_string_size(str);
+    i = -(sexp_string_length(str) - i);
+  } else if (i > (sexp_cached_char_idx(str) >> 1)) {
+    j = sexp_unbox_string_cursor(sexp_cached_cursor(str));
+    i -= sexp_cached_char_idx(str);
+  }
 #endif
-  for ( ; i>0 && j<limit; i--)
-    j += sexp_utf8_initial_byte_count(p[j]);
+
+#if SEXP_USE_STRING_REF_CACHE
+  if (i >= 0) {
+#endif
+    for ( ; i>0 && j<limit; i--)
+      j += sexp_utf8_initial_byte_count(p[j]);
+#if SEXP_USE_STRING_REF_CACHE
+  } else {
+    for (q=p+j; i<0 && q>=p; i++)
+      q = (unsigned char*)sexp_string_utf8_prev(q);
+    j = q - p;
+  }
+#endif
+
   if (i != 0)
     return sexp_user_exception(ctx, self, "string-index->cursor: index out of range", index);
-  return sexp_make_string_cursor(j);
+  cursor = sexp_make_string_cursor(j);
+#if SEXP_USE_STRING_REF_CACHE
+  sexp_cached_char_idx(str) = sexp_unbox_fixnum(index);
+  sexp_cached_cursor(str) = cursor;
+#endif
+  return cursor;
 }
 
 sexp sexp_string_cursor_to_index (sexp ctx, sexp self, sexp_sint_t n, sexp str, sexp offset) {
@@ -1269,7 +1331,24 @@ sexp sexp_string_cursor_to_index (sexp ctx, sexp self, sexp_sint_t n, sexp str, 
   sexp_assert_type(ctx, sexp_string_cursorp, SEXP_STRING_CURSOR, offset);
   if (off < 0 || off > (sexp_sint_t)sexp_string_size(str))
     return sexp_user_exception(ctx, self, "string-cursor->index: offset out of range", offset);
+#if SEXP_USE_STRING_REF_CACHE
+  sexp_uint_t cached_idx = sexp_cached_char_idx(str);
+  sexp_sint_t cached_off = sexp_unbox_string_cursor(sexp_cached_cursor(str));
+  unsigned char* string_data = (unsigned char*)sexp_string_data(str);
+  sexp_sint_t idx_delta;
+  if (off >= cached_off) {
+    idx_delta = sexp_string_utf8_length(string_data+cached_off, off-cached_off);
+  } else {
+    idx_delta = 0 - sexp_string_utf8_length(string_data+off, cached_off-off);
+  }
+
+  sexp_uint_t new_idx = cached_idx + idx_delta;
+  sexp_cached_char_idx(str) = new_idx;
+  sexp_cached_cursor(str) = offset;
+  return sexp_make_fixnum(new_idx);
+#else
   return sexp_make_fixnum(sexp_string_utf8_length((unsigned char*)sexp_string_data(str), off));
+#endif
 }
 
 sexp sexp_string_cursor_offset (sexp ctx, sexp self, sexp_sint_t n, sexp cur) {
@@ -1281,7 +1360,7 @@ sexp sexp_string_cursor_offset (sexp ctx, sexp self, sexp_sint_t n, sexp cur) {
 
 #if SEXP_USE_STRING_INDEX_TABLE
 void sexp_update_string_index_lookup(sexp ctx, sexp s) {
-  char *p;
+  unsigned char *p;
   sexp_sint_t numchunks, len, i, *chunks;
   sexp_gc_var1(tmp);
   if (sexp_string_size(s) < SEXP_STRING_INDEX_TABLE_CHUNK_SIZE*1.2) {
@@ -1295,12 +1374,12 @@ void sexp_update_string_index_lookup(sexp ctx, sexp s) {
   sexp_string_charlens(s) =
     sexp_make_bytes_op(ctx, NULL, 2, sexp_make_fixnum(numchunks * sizeof(sexp_sint_t)), SEXP_VOID);
   chunks = (sexp_sint_t*)sexp_bytes_data(sexp_string_charlens(s));
-  p = sexp_string_data(s);
+  p = (unsigned char*) sexp_string_data(s);
   i = 0;
   while (1) {
     p += sexp_utf8_initial_byte_count(*p);
     if (++i % SEXP_STRING_INDEX_TABLE_CHUNK_SIZE == 0) {
-      chunks[i/SEXP_STRING_INDEX_TABLE_CHUNK_SIZE - 1] = p - sexp_string_data(s);
+      chunks[i/SEXP_STRING_INDEX_TABLE_CHUNK_SIZE - 1] = p - (unsigned char*) sexp_string_data(s);
       if (i / SEXP_STRING_INDEX_TABLE_CHUNK_SIZE >= numchunks-1)
         break;
     }
@@ -1341,6 +1420,10 @@ sexp sexp_make_string_op (sexp ctx, sexp self, sexp_sint_t n, sexp len, sexp ch)
   sexp_string_bytes(s) = b;
   sexp_string_offset(s) = 0;
   sexp_string_size(s) = sexp_bytes_length(b);
+#if SEXP_USE_STRING_REF_CACHE
+  sexp_cached_char_idx(s) = 0;
+  sexp_cached_cursor(s) = sexp_make_string_cursor(0);
+#endif
   sexp_update_string_index_lookup(ctx, s);
   sexp_gc_release2(ctx);
   return s;
@@ -1799,7 +1882,9 @@ sexp sexp_make_ephemeron_op(sexp ctx, sexp self, sexp_sint_t n, sexp key, sexp v
   }
   return res;
 }
+#endif /* SEXP_USE_WEAK_REFERENCES */
 
+#if SEXP_USE_UNIFY_FILENOS_BY_NUMBER
 static sexp* sexp_fileno_cell(sexp ctx, sexp vec, int fd) {
   sexp *data;
   sexp_sint_t i, cell, len;
@@ -1809,7 +1894,9 @@ static sexp* sexp_fileno_cell(sexp ctx, sexp vec, int fd) {
   if (len == 0)
     return NULL;
   data = sexp_vector_data(vec);
-  for (i = 0, cell = (fd * FNV_PRIME) % len; i < len; i++, cell=(cell+1)%len)
+  cell = (fd * FNV_PRIME) % len;
+  if (cell < 0) cell += len;
+  for (i = 0; i < len; i++, cell=(cell+1)%len)
     if (!sexp_ephemeronp(data[cell])
         || (sexp_filenop(sexp_ephemeron_key(data[cell]))
             && sexp_fileno_fd(sexp_ephemeron_key(data[cell])) == fd))
@@ -1820,8 +1907,11 @@ static sexp* sexp_fileno_cell(sexp ctx, sexp vec, int fd) {
 static sexp sexp_lookup_fileno(sexp ctx, int fd) {
   sexp* cell = sexp_fileno_cell(ctx, sexp_global(ctx, SEXP_G_FILE_DESCRIPTORS), fd);
   if (cell && sexp_ephemeronp(*cell)
-      && sexp_fileno_fd(sexp_ephemeron_key(*cell)) == fd)
-    return sexp_ephemeron_key(*cell);
+      && sexp_filenop(sexp_ephemeron_key(*cell))
+      && sexp_fileno_fd(sexp_ephemeron_key(*cell)) == fd) {
+    if (sexp_fileno_openp(sexp_ephemeron_key(*cell)))
+      return sexp_ephemeron_key(*cell);
+  }
   return SEXP_FALSE;
 }
 
@@ -1856,13 +1946,13 @@ static void sexp_insert_fileno(sexp ctx, sexp fileno) {
     n++;
   sexp_global(ctx, SEXP_G_NUM_FILE_DESCRIPTORS) = sexp_make_fixnum(n);
 }
-#endif
+#endif  /* SEXP_USE_UNIFY_FILENOS_BY_NUMBER */
 
 sexp sexp_make_fileno_op (sexp ctx, sexp self, sexp_sint_t n, sexp fd, sexp no_closep) {
   sexp_gc_var1(res);
   sexp_assert_type(ctx, sexp_fixnump, SEXP_FIXNUM, fd);
   if (sexp_unbox_fixnum(fd) < 0) return SEXP_FALSE;
-#if SEXP_USE_WEAK_REFERENCES
+#if SEXP_USE_UNIFY_FILENOS_BY_NUMBER
   res = sexp_lookup_fileno(ctx, sexp_unbox_fixnum(fd));
   if (sexp_filenop(res)) {
     sexp_fileno_no_closep(res) = sexp_truep(no_closep);
@@ -1876,7 +1966,7 @@ sexp sexp_make_fileno_op (sexp ctx, sexp self, sexp_sint_t n, sexp fd, sexp no_c
     sexp_fileno_fd(res) = sexp_unbox_fixnum(fd);
     sexp_fileno_openp(res) = 1;
     sexp_fileno_no_closep(res) = sexp_truep(no_closep);
-#if SEXP_USE_WEAK_REFERENCES
+#if SEXP_USE_UNIFY_FILENOS_BY_NUMBER
     sexp_insert_fileno(ctx, res);
 #endif
   }
@@ -1903,7 +1993,7 @@ sexp sexp_make_input_port (sexp ctx, FILE* in, sexp name) {
 #if SEXP_USE_FOLD_CASE_SYMS
   sexp_port_fold_casep(p) = sexp_truep(sexp_global(ctx, SEXP_G_FOLD_CASE_P));
 #endif
-#if SEXP_USE_WEAK_REFERENCES
+#if SEXP_USE_UNIFY_FILENOS_BY_NUMBER
   /* if the fd was previously opened by a non-stream port, preserve it */
   /* here to avoid gc timing issues */
   if (in && fileno(in) >= 0) {
@@ -2087,7 +2177,7 @@ sexp sexp_write_one (sexp ctx, sexp obj, sexp out, sexp_sint_t bound) {
   sexp_uint_t res;
 #endif
   sexp_uint_t len, c;
-  sexp_sint_t i=0;
+  sexp_sint_t i=0, j, k;
 #if SEXP_USE_FLONUMS
   double f, ftmp;
 #endif
@@ -2149,14 +2239,38 @@ sexp sexp_write_one (sexp ctx, sexp obj, sexp out, sexp_sint_t bound) {
       } else
 #endif
       {
-        i = snprintf(numbuf, NUMBUF_LEN, "%.15lg", f);
+        /* snprintf doesn't guarantee the shortest accurate */
+        /* representation, so we try successively longer formats until */
+        /* we find the one that scans back as the original number */
+        i = snprintf(numbuf, sizeof(numbuf), "%.15lg", f);
         if (sscanf(numbuf, "%lg", &ftmp) == 1 && ftmp != f) {
-          i = snprintf(numbuf, NUMBUF_LEN, "%.16lg", f);
+          i = snprintf(numbuf, sizeof(numbuf), "%.16lg", f);
           if (sscanf(numbuf, "%lg", &ftmp) == 1 && ftmp != f) {
-            i = snprintf(numbuf, NUMBUF_LEN, "%.17lg", f);
+            i = snprintf(numbuf, sizeof(numbuf), "%.17lg", f);
           }
         }
-        if (!strchr(numbuf, '.') && !strchr(numbuf, 'e')) {
+        for (j = 0; j < i; ++j) {
+          if (numbuf[j] == '.' || numbuf[j] == 'e') {
+            break;
+#if SEXP_USE_PATCH_NON_DECIMAL_NUMERIC_FORMATS
+          } else if (!sexp_isdigit(numbuf[j]) && numbuf[j] != '-') {
+            /* handle the case where we're embedded in an app which has */
+            /* called setlocale to something which doesn't use a decimal */
+            /* separator (e.g. a comma), by replacing any */
+            /* non-digit/decimal char with a decimal */
+            for (k = j+1; k < i && !sexp_isdigit(numbuf[k]); ++k)
+              ;
+            numbuf[j++] = '.';
+            while (k < i)
+              numbuf[j++] = numbuf[k++];
+            numbuf[j++] = '\0';
+            j = 0;
+            break;
+          }
+#endif
+        }
+        /* regardless, append a decimal if there wasn't any */
+        if (j >= i) {
           numbuf[i++] = '.'; numbuf[i++] = '0'; numbuf[i++] = '\0';
         }
       }
@@ -2166,8 +2280,15 @@ sexp sexp_write_one (sexp ctx, sexp obj, sexp out, sexp_sint_t bound) {
 #endif
     case SEXP_PROCEDURE:
       sexp_write_string(ctx, "#<procedure ", out);
+      if (sexp_procedure_variable_transformer_p(obj))
+        sexp_write_string(ctx, "(variable-transformer) ", out);
       x = sexp_bytecode_name(sexp_procedure_code(obj));
       sexp_write_one(ctx, sexp_synclop(x) ? sexp_synclo_expr(x): x, out, bound+1);
+      sexp_write_string(ctx, " ", out);
+      sexp_write_one(ctx, sexp_make_fixnum(sexp_procedure_num_args(obj)), out, bound+1);
+      if (sexp_procedure_variadic_p(obj)) {
+        sexp_write_string(ctx, "+", out);
+      }
 #if SEXP_USE_DEBUG_VM
       if (sexp_procedure_source(obj)) {
         sexp_write_string(ctx, " ", out);
@@ -2286,7 +2407,7 @@ sexp sexp_write_one (sexp ctx, sexp obj, sexp out, sexp_sint_t bound) {
         if (i!=0) sexp_write_char(ctx, ' ', out);
 #if SEXP_BYTEVECTOR_HEX_LITERALS
 	if (str[i]) {
-	  snprintf(buf, 5, "#x%02hhX", ((unsigned char*) str)[i]);
+          snprintf(buf, sizeof(buf), "#x%02hhX", ((unsigned char*) str)[i]);
 	  sexp_write_string(ctx, buf, out);
 	} else {
 	  sexp_write_char (ctx, '0', out);
@@ -2341,7 +2462,7 @@ sexp sexp_write_one (sexp ctx, sexp obj, sexp out, sexp_sint_t bound) {
       break;
     }
   } else if (sexp_fixnump(obj)) {
-    snprintf(numbuf, NUMBUF_LEN, "%" SEXP_PRIdFIXNUM, (sexp_sint_t)sexp_unbox_fixnum(obj));
+    snprintf(numbuf, sizeof(numbuf), "%" SEXP_PRIdFIXNUM, (sexp_sint_t)sexp_unbox_fixnum(obj));
     sexp_write_string(ctx, numbuf, out);
 #if SEXP_USE_IMMEDIATE_FLONUMS
   } else if (sexp_flonump(obj)) {
@@ -2353,7 +2474,7 @@ sexp sexp_write_one (sexp ctx, sexp obj, sexp out, sexp_sint_t bound) {
     } else
 #endif
     {
-      i = snprintf(numbuf, NUMBUF_LEN, "%.8g", f);
+      i = snprintf(numbuf, sizeof(numbuf), "%.8g", f);
       if (f == trunc(f) && ! strchr(numbuf, '.')) {
         numbuf[i++] = '.'; numbuf[i++] = '0'; numbuf[i++] = '\0';
       }
@@ -2526,7 +2647,7 @@ sexp sexp_read_string (sexp ctx, sexp in, int sentinel) {
     } else if (c == '\n') {
       sexp_port_line(in)++;
     } else if (c == EOF) {
-      res = sexp_read_error(ctx, "premature end of string", SEXP_NULL, in);
+      res = sexp_read_incomplete_error(ctx, "premature end of string", SEXP_NULL, in);
       break;
     }
     buf[i++] = c;
@@ -2769,6 +2890,13 @@ sexp sexp_make_ratio (sexp ctx, sexp num, sexp den) {
 sexp sexp_ratio_normalize (sexp ctx, sexp rat, sexp in) {
   sexp tmp;
   sexp_gc_var2(num, den);
+  if (sexp_exact_negativep(sexp_ratio_denominator(rat))) {
+    /* Prevent overflow in the sexp_negate. */
+    if (sexp_ratio_numerator(rat) == sexp_make_fixnum(SEXP_MIN_FIXNUM))
+      sexp_ratio_numerator(rat) = sexp_fixnum_to_bignum(ctx, sexp_ratio_numerator(rat));
+    sexp_negate(sexp_ratio_numerator(rat));
+    sexp_negate(sexp_ratio_denominator(rat));
+  }
   num = sexp_ratio_numerator(rat), den = sexp_ratio_denominator(rat);
   if (den == SEXP_ZERO)
     return sexp_read_error(ctx, "zero denominator in ratio", rat, in);
@@ -2788,6 +2916,9 @@ sexp sexp_ratio_normalize (sexp ctx, sexp rat, sexp in) {
   sexp_ratio_numerator(rat)
     = sexp_quotient(ctx, sexp_ratio_numerator(rat), num);
   if (sexp_exact_negativep(sexp_ratio_denominator(rat))) {
+    /* Prevent overflow in the sexp_negate. */
+    if (sexp_ratio_numerator(rat) == sexp_make_fixnum(SEXP_MIN_FIXNUM))
+      sexp_ratio_numerator(rat) = sexp_fixnum_to_bignum(ctx, sexp_ratio_numerator(rat));
     sexp_negate(sexp_ratio_numerator(rat));
     sexp_negate(sexp_ratio_denominator(rat));
   }
@@ -2898,7 +3029,8 @@ sexp sexp_read_number (sexp ctx, sexp in, int base, int exactp) {
   } else if (c=='/') {
     sexp_gc_preserve2(ctx, res, den);
     den = sexp_read_number(ctx, in, base, exactp);
-    if (! (sexp_fixnump(den) || sexp_bignump(den) || sexp_complexp(den)))
+    if (! (sexp_fixnump(den) || sexp_bignump(den) ||
+           (sexp_complexp(den) && sexp_exactp(sexp_complex_real(den)) && sexp_exactp(sexp_complex_imag(den)))))
       res = (sexp_exceptionp(den)
              ? den : sexp_read_error(ctx, "invalid rational syntax", den, in));
     else {
@@ -2912,12 +3044,15 @@ sexp sexp_read_number (sexp ctx, sexp in, int base, int exactp) {
         sexp_complex_imag(den) = res;
 #if SEXP_USE_MATH
       } else if (sexp_flonump(sexp_complex_real(den))) { /* assume polar */
-        rho = sqrt(sexp_flonum_value(sexp_complex_real(den)) *
-                   sexp_flonum_value(sexp_complex_real(den)) +
-                   sexp_to_double(ctx, sexp_complex_imag(den)) +
+        double real = sexp_flonum_value(sexp_complex_real(den));
+        rho = sqrt(real * real +
+                   sexp_to_double(ctx, sexp_complex_imag(den)) *
                    sexp_to_double(ctx, sexp_complex_imag(den)));
         theta = atan(sexp_to_double(ctx, sexp_complex_imag(den)) /
                      sexp_flonum_value(sexp_complex_real(den)));
+        if (real < 0) {
+          theta += M_PI;
+        }
         rho = sexp_to_double(ctx, sexp_div(ctx, res, sexp_make_fixnum((sexp_sint_t)round(rho))));
         sexp_complex_real(den) = sexp_make_flonum(ctx, rho * cos(theta));
         sexp_complex_imag(den) = sexp_make_flonum(ctx, rho * sin(theta));
@@ -3002,6 +3137,107 @@ static sexp sexp_fill_reader_labels(sexp ctx, sexp x, sexp shares, int state) {
 }
 #endif
 
+#if SEXP_USE_MINI_FLOAT_UNIFORM_VECTORS
+/* Pre-computed 1.5.2 mini-float table (CUDA __NV_E5M2). */
+/* We prefer a larger exponent for wider range. */
+/* Note 9 is the first natural number that can't be represented exactly. */
+/* Technically the implementation allows any hand-picked set of values. */
+static const double sexp_quarters[] = {
+              0.0,  1.52587890625e-05,  3.0517578125e-05,  4.57763671875e-05,
+  6.103515625e-05,  7.62939453125e-05,  9.1552734375e-05, 0.0001068115234375,
+  0.0001220703125,  0.000152587890625,  0.00018310546875,  0.000213623046875,
+   0.000244140625,   0.00030517578125,   0.0003662109375,   0.00042724609375,
+    0.00048828125,    0.0006103515625,    0.000732421875,    0.0008544921875,
+     0.0009765625,     0.001220703125,     0.00146484375,     0.001708984375,
+      0.001953125,      0.00244140625,      0.0029296875,      0.00341796875,
+       0.00390625,       0.0048828125,       0.005859375,       0.0068359375,
+        0.0078125,        0.009765625,        0.01171875,        0.013671875,
+         0.015625,         0.01953125,         0.0234375,         0.02734375,
+          0.03125,          0.0390625,          0.046875,          0.0546875,
+           0.0625,           0.078125,           0.09375,           0.109375,
+            0.125,            0.15625,            0.1875,            0.21875,
+             0.25,             0.3125,             0.375,             0.4375,
+              0.5,              0.625,              0.75,              0.875,
+              1.0,               1.25,               1.5,               1.75,
+              2.0,                2.5,               3.0,                3.5,
+              4.0,                5.0,               6.0,                7.0,
+              8.0,               10.0,              12.0,               14.0,
+             16.0,               20.0,              24.0,               28.0,
+             32.0,               40.0,              48.0,               56.0,
+             64.0,               80.0,              96.0,              112.0,
+            128.0,              160.0,             192.0,              224.0,
+            256.0,              320.0,             384.0,              448.0,
+            512.0,              640.0,             768.0,              896.0,
+           1024.0,             1280.0,            1536.0,             1792.0,
+           2048.0,             2560.0,            3072.0,             3584.0,
+           4096.0,             5120.0,            6144.0,             7168.0,
+           8192.0,            10240.0,           12288.0,            14336.0,
+          16384.0,            20480.0,           24576.0,            28672.0,
+          32768.0,            40960.0,           49152.0,            57344.0,
+         INFINITY,                NAN,               NAN,                NAN
+};
+
+#define SEXP_QUARTERS_INFINITY_INDEX 124
+#define SEXP_QUARTERS_NAN_INDEX 127
+
+double sexp_quarter_to_double(unsigned char q) {
+  return q < 128 ? sexp_quarters[q] : -sexp_quarters[q-128];
+}
+
+unsigned char sexp_double_to_quarter(double f) {
+  int lo = 0, hi = SEXP_QUARTERS_INFINITY_INDEX - 1, mid;
+  if (isnan(f)) return SEXP_QUARTERS_NAN_INDEX;
+  if (f < 0) return 128 + sexp_double_to_quarter(-f);
+  if (isinf(f)) return SEXP_QUARTERS_INFINITY_INDEX;
+  while (lo <= hi) {
+    mid = (lo + hi) / 2;
+    if (sexp_quarters[mid] < f) {
+      lo = mid + 1;
+    } else if (sexp_quarters[mid] > f) {
+      hi = mid - 1;
+    } else {
+      return mid;
+    }
+  }
+  /* TODO: overflow to infinity? */
+  return (sexp_quarters[lo] - f) < (f - sexp_quarters[hi]) ? lo : hi;
+}
+
+static unsigned int float_as_int(const float f) {
+  union sexp_flonum_conv x;
+  x.flonum = f;
+  return x.bits;
+}
+
+static float int_as_float(const unsigned int n) {
+  union sexp_flonum_conv x;
+  x.bits = n;
+  return x.flonum;
+}
+
+/* https://arxiv.org/abs/2112.08926 */
+double sexp_half_to_double(unsigned short x) {
+  unsigned int e, m, v;
+  if (x == 31744) return INFINITY;
+  if (x == 32767) return NAN;
+  if (x == 64512) return -INFINITY;
+  e = (x&0x7C00)>>10;
+  m = (x&0x03FF)<<13;
+  v = float_as_int((float)m)>>23;
+  return int_as_float((x&0x8000)<<16 | (e!=0)*((e+112)<<23|m) | ((e==0)&(m!=0))*((v-37)<<23|((m<<(150-v))&0x007FE000)));
+}
+
+unsigned short sexp_double_to_half(double x) {
+  unsigned int b, e, m;
+  if (isnan(x)) return 32767;
+  if (isinf(x)) return x < 0 ? 64512 : 31744;
+  b = float_as_int(x)+0x00001000;
+  e = (b&0x7F800000)>>23;
+  m = b&0x007FFFFF;
+  return (b&0x80000000)>>16 | (e>112)*((((e-112)<<10)&0x7C00)|m>>13) | ((e<113)&(e>101))*((((0x007FF000+m)>>(125-e))+1)>>1) | (e>143)*0x7FFF;
+}
+#endif
+
 static int sexp_peek_char(sexp ctx, sexp in) {
   int c = sexp_read_char(ctx, in);
   if (c != EOF) sexp_push_char(ctx, c, in);
@@ -3012,8 +3248,16 @@ static int sexp_peek_char(sexp ctx, sexp in) {
 static int sexp_resolve_uniform_type(int c, sexp len) {
   switch (sexp_fixnump(len) ? sexp_unbox_fixnum(len) : 0) {
     case 1: if (c=='u') return SEXP_U1; break;
-    case 8: if (c=='u') return SEXP_U8; if (c=='s') return SEXP_S8; break;
-    case 16: if (c=='u') return SEXP_U16; if (c=='s') return SEXP_S16; break;
+    case 8: if (c=='u') return SEXP_U8; if (c=='s') return SEXP_S8;
+#if SEXP_USE_MINI_FLOAT_UNIFORM_VECTORS
+      if (c=='f') return SEXP_F8;
+#endif
+      break;
+    case 16: if (c=='u') return SEXP_U16; if (c=='s') return SEXP_S16;
+#if SEXP_USE_MINI_FLOAT_UNIFORM_VECTORS
+      if (c=='f') return SEXP_F16;
+#endif
+      break;
     case 32: if (c=='u') return SEXP_U32; if (c=='s') return SEXP_S32; if (c=='f') return SEXP_F32; break;
     case 64: if (c=='u') return SEXP_U64; if (c=='s') return SEXP_S64; if (c=='f') return SEXP_F64; if (c=='c') return SEXP_C64; break;
     case 128: if (c=='c') return SEXP_C128; break;
@@ -3052,7 +3296,7 @@ sexp sexp_list_to_uvector_op(sexp ctx, sexp self, sexp_sint_t n, sexp etype, sex
 #if SEXP_USE_UNIFORM_VECTOR_LITERALS
           ((sexp_uvector_prefix(et) == 'u') || (sexp_uvector_prefix(et) == 's')) ?
 #endif
-          !(sexp_exact_integerp(tmp) && sexp_sint_value(tmp) >= min
+          !((min == 0 && sexp_bignump(tmp) ? sexp_bignum_sign(tmp) > 0 : sexp_exact_integerp(tmp) && sexp_sint_value(tmp) >= min)
             && (sexp_sint_value(tmp) < 0 || sexp_uint_value(tmp) <= max))
 #if SEXP_USE_UNIFORM_VECTOR_LITERALS
           : ((sexp_uvector_prefix(et) == 'c') ? !sexp_numberp(tmp) :
@@ -3093,6 +3337,12 @@ sexp sexp_list_to_uvector_op(sexp ctx, sexp self, sexp_sint_t n, sexp etype, sex
         case SEXP_U64:
           ((uint64_t*)sexp_uvector_data(res))[i] = sexp_uint_value(sexp_car(ls)); break;
 #if SEXP_USE_FLONUMS
+#if SEXP_USE_MINI_FLOAT_UNIFORM_VECTORS
+        case SEXP_F8:
+          ((unsigned char*)sexp_uvector_data(res))[i] = sexp_double_to_quarter(sexp_to_double(ctx, sexp_car(ls))); break;
+        case SEXP_F16:
+          ((unsigned short*)sexp_uvector_data(res))[i] = sexp_double_to_half(sexp_to_double(ctx, sexp_car(ls))); break;
+#endif
         case SEXP_F32:
           ((float*)sexp_uvector_data(res))[i] = sexp_to_double(ctx, sexp_car(ls)); break;
         case SEXP_F64:
@@ -3195,7 +3445,10 @@ sexp sexp_read_raw (sexp ctx, sexp in, sexp *shares) {
                                 SEXP_NULL, in);
         } else {
           tmp = sexp_read_raw(ctx, in, shares);
-          if (sexp_exceptionp(tmp)) {
+          if (tmp == SEXP_EOF) {
+            res = sexp_read_incomplete_error(ctx, "no input after dot",
+                                             SEXP_NULL, in);
+          } else if (sexp_exceptionp(tmp)) {
             res = tmp;
           } else if (tmp == SEXP_CLOSE) {
             res = sexp_read_error(ctx, "no final element in list after dot",
@@ -3215,8 +3468,8 @@ sexp sexp_read_raw (sexp ctx, sexp in, sexp *shares) {
       } else if (tmp == SEXP_CLOSE) {
         res = (sexp_pairp(res) ? sexp_nreverse(ctx, res) : res);
       } else {
-        res = sexp_read_error(ctx, "missing trailing ')' started on line",
-                              sexp_make_fixnum(line), in);
+        res = sexp_read_incomplete_error(ctx, "missing trailing ')' started on line",
+                                         sexp_make_fixnum(line), in);
       }
     }
     if ((line >= 0) && sexp_pairp(res)) {
@@ -3361,6 +3614,7 @@ sexp sexp_read_raw (sexp ctx, sexp in, sexp *shares) {
       } else if (c2 != SEXP_NOT_A_UNIFORM_TYPE) {
         tmp = sexp_read_one(ctx, in, shares);
         res = sexp_list_to_uvector(ctx, sexp_make_fixnum(c2), tmp);
+        if (!sexp_exceptionp(res)) sexp_immutablep(res) = 1;
       } else {
         tmp = sexp_list2(ctx, sexp_make_character(c1), res);
         res = sexp_read_error(ctx, "invalid uniform vector syntax #%c%c", tmp, in);
@@ -3435,7 +3689,7 @@ sexp sexp_read_raw (sexp ctx, sexp in, sexp *shares) {
         }
       }
       if (c1 == EOF)
-        res = sexp_read_error(ctx, "unterminated #| comment", SEXP_NULL, in);
+        res = sexp_read_incomplete_error(ctx, "unterminated #| comment", SEXP_NULL, in);
       else
         goto scan_loop;
       break;
@@ -3603,9 +3857,9 @@ sexp sexp_read_raw (sexp ctx, sexp in, sexp *shares) {
 #if SEXP_USE_COMPLEX
           if (sexp_complexp(res)) {
             if (sexp_complex_real(res) == SEXP_ZERO) {
-              sexp_negate(sexp_complex_imag(res));
+              sexp_negate_maybe_ratio(sexp_complex_imag(res));
             } else {
-              sexp_negate(sexp_complex_real(res));
+              sexp_negate_maybe_ratio(sexp_complex_real(res));
             }
           } else
 #endif
@@ -3722,7 +3976,7 @@ sexp sexp_read_from_string (sexp ctx, const char *str, sexp_sint_t len) {
 
 sexp sexp_string_to_number_op (sexp ctx, sexp self, sexp_sint_t n, sexp str, sexp b) {
   int base;
-  sexp_gc_var1(in);
+  sexp_gc_var2(in, res);
   sexp_assert_type(ctx, sexp_stringp, SEXP_STRING, str);
   sexp_assert_type(ctx, sexp_fixnump, SEXP_FIXNUM, b);
   if (((base=sexp_unbox_fixnum(b)) < 2) || (base > 36))
@@ -3730,20 +3984,22 @@ sexp sexp_string_to_number_op (sexp ctx, sexp self, sexp_sint_t n, sexp str, sex
   if (sexp_string_data(str)[0]=='\0'
       || (sexp_string_data(str)[1]=='\0' && !sexp_isxdigit((unsigned char)(sexp_string_data(str)[0]))))
     return SEXP_FALSE;
-  sexp_gc_preserve1(ctx, in);
+  sexp_gc_preserve2(ctx, in, res);
   in = sexp_open_input_string(ctx, str);
   if (sexp_string_data(str)[0] == '+') {
     if (sexp_isdigit((unsigned char)(sexp_string_data(str)[1]))
         || sexp_string_data(str)[1] == '.' || sexp_string_data(str)[1] == '#')
       sexp_read_char(ctx, in);
   }
-  in = ((sexp_string_data(str)[0] == '#' &&
-         sexp_tolower((unsigned char)sexp_string_data(str)[1]) != 'e' &&
-         sexp_tolower((unsigned char)sexp_string_data(str)[1]) != 'i')
-        || base == 10 ? sexp_read(ctx, in) :
-        sexp_read_number(ctx, in, base, 0));
-  sexp_gc_release1(ctx);
-  return sexp_numberp(in) ? in : SEXP_FALSE;
+  res = ((sexp_string_data(str)[0] == '#' &&
+          sexp_tolower((unsigned char)sexp_string_data(str)[1]) != 'e' &&
+          sexp_tolower((unsigned char)sexp_string_data(str)[1]) != 'i')
+         || base == 10 ? sexp_read(ctx, in) :
+         sexp_read_number(ctx, in, base, 0));
+  if (!sexp_numberp(res) || sexp_peek_char(ctx, in) != EOF)
+    res = SEXP_FALSE;
+  sexp_gc_release2(ctx);
+  return res;
 }
 
 sexp sexp_write_to_string (sexp ctx, sexp obj) {
