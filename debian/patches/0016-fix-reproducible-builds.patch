@@ -1,20 +1,50 @@
 From: Shriram Ravindranathan <s20n@ters.dev>
 Date: Sun, 3 May 2026 19:09:27 +0530
-Subject: Fix reproducible builds by scrubbing volatile output
+Subject: Fix reproducible builds
 
+chibi-scheme-doc:
 Suppressed memory addresses in documentation and timing metrics
 in test outputs when SOURCE_DATE_EPOCH is set. This ensures the
 chibi-scheme-doc package builds reproducibly.
 
+chibi-scheme-common:
+Sorted find output in Makefile for reproducible builds.
+The generated .chibi.meta, .scheme.meta, and .srfi.meta files had
+non-deterministic ordering on rebuilderd causing FTBR. This patch
+fixes those issues by piping find output through LC_ALL=C sort.
+See: https://reproduce.debian.net/all/api/v1/builds/202656/artifacts/414510/diffoscope
+
 Forwarded: not-needed
 Author: Shriram Ravindranathan <s20n@ters.dev>
-Last-Update: 2026-05-03
+Last-Update: 2026-05-17
 ---
+ Makefile           | 3 ++-
  lib/chibi/csv.scm  | 7 ++++---
  lib/chibi/doc.scm  | 4 +---
  lib/chibi/test.scm | 4 +++-
- 3 files changed, 8 insertions(+), 7 deletions(-)
+ 4 files changed, 10 insertions(+), 8 deletions(-)
 
+diff --git a/Makefile b/Makefile
+index 2967f22..4ffad3a 100644
+--- a/Makefile
++++ b/Makefile
+@@ -154,7 +154,7 @@ clibs.c: $(CHIBI_GENSTATIC_DEPENDENCIES) $(COMPILED_LIBS:%$(SO)=%.c)
+ 	if [ -d .git ]; then \
+ 		$(GIT) ls-files lib | $(GREP) .sld | $(CHIBI_GENSTATIC) > $@; \
+ 	else \
+-		$(FIND) lib -name \*.sld | $(CHIBI_GENSTATIC) > $@; \
++		$(FIND) lib -name \*.sld | LC_ALL=C sort | $(CHIBI_GENSTATIC) > $@; \
+ 	fi
+ 
+ chibi-scheme.pc: chibi-scheme.pc.in
+@@ -195,6 +195,7 @@ doc: doc/chibi.html doc-libs
+ 
+ lib/.%.meta: lib/%/ tools/generate-install-meta.scm $(CHIBI_DEPENDENCIES)
+ 	-$(FIND) $< -name \*.sld | \
++	 LC_ALL=C sort | \
+ 	 $(CHIBI) tools/generate-install-meta.scm $(CHIBI_VERSION) > $@
+ 
+ ########################################################################
 diff --git a/lib/chibi/csv.scm b/lib/chibi/csv.scm
 index d5c572d..f2967e5 100644
 --- a/lib/chibi/csv.scm
