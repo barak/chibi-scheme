@@ -4,5 +4,5 @@ Tests: chibi-ffi, libchibi-scheme
 Depends: @, build-essential
 
 Tests: snow-chibi
-Depends: @, build-essential, sqlite3, libsqlite3-dev
+Depends: @, build-essential, pkgconf, sqlite3, libsqlite3-dev
 Restrictions: needs-root
