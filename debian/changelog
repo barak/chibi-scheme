@@ -1,3 +1,18 @@
+chibi-scheme (0.12-2) unstable; urgency=medium
+
+  [ Debian Janitor ]
+  * Apply multi-arch hints.
+    - chibi-scheme-doc: Add Multi-Arch: foreign.
+    - libchibi-scheme0: Add Multi-Arch: same.
+
+  [ Shriram Ravindranathan ]
+  * d/t/control: Add pkgconf dependency to fix autopkgtest failures.
+  * d/p/0016-fix-reproducible-builds.patch:
+    - Update patch to add fix for FTBR in chibi-scheme-common.
+  * d/copyright: Add copyright block for missed author from DFSG review.
+
+ -- Shriram Ravindranathan <s20n@ters.dev>  Sun, 17 May 2026 11:31:54 +0530
+
 chibi-scheme (0.12-1) unstable; urgency=medium
 
   [ Shriram Ravindranathan ]

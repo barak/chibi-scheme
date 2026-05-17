@@ -55,6 +55,10 @@ Files: lib/srfi/165.scm lib/srfi/165.sld
 Copyright: 2019 Marc Nieper-Wißkirchen
 License: Expat
 
+Files: lib/srfi/179/test.sld lib/srfi/231/test.sld
+Copyright: 2016-2020 Bradley J Lucier
+License: Expat
+
 Files: lib/srfi/64.scm
 Copyright:
  2005-2013 Per Bothner
