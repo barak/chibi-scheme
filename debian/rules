@@ -1,9 +1,8 @@
 #!/usr/bin/make -f
 
-DEB_BUILD_MAINT_OPTIONS = hardening=+all
+export DEB_BUILD_MAINT_OPTIONS = hardening=+all
 
-# This defines and exports DEB_HOST_MULTIARCH and a host of other garbage
-include /usr/share/dpkg/default.mk
+include /usr/share/dpkg/architecture.mk
 
 # Manually implement multiarch support here since debhelper seems to pass
 # this information in a proper form only to the Autoconf build system.
@@ -36,3 +35,11 @@ override_dh_auto_install:
 # Make sure that "make install" does not build and install image files.
 # Those will be created on the user machine at package configuration time.
 	dh_auto_install -- $(EXTRA_ARGS) IMAGE_FILES=
+# The generated (chibi snow install) library hardcodes the multiarch
+# snow binary module directory, so it must not go into the arch:all
+# chibi-scheme-common package.  Move it into the multiarch module
+# directory, which is also on the default module path, so that it is
+# shipped in libchibi-scheme-ffi instead.
+	mkdir -p debian/tmp/usr/lib/$(DEB_HOST_MULTIARCH)/chibi/chibi/snow
+	mv debian/tmp/usr/share/chibi/chibi/snow/install.sld \
+	   debian/tmp/usr/lib/$(DEB_HOST_MULTIARCH)/chibi/chibi/snow/

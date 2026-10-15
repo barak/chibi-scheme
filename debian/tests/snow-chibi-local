@@ -1,0 +1,41 @@
+#!/bin/sh
+#
+# Smoke-test of snow-chibi package manager without network access:
+# package, install, use and remove a local library with native code
+
+set -eu
+
+AUTOPKGTEST_TMP=${AUTOPKGTEST_TMP:-$(mktemp -d)}
+cd "$AUTOPKGTEST_TMP"
+
+mkdir -p autopkgtest
+cat > autopkgtest/ffi.sld <<EOF
+(define-library (autopkgtest ffi)
+  (export ffi-add)
+  (import (scheme base))
+  (include-shared "ffi"))
+EOF
+cat > autopkgtest/ffi.stub <<EOF
+(c-declare "static int ffi_add(int a, int b) { return a + b; }")
+(define-c int (ffi-add "ffi_add") (int int))
+EOF
+
+snow-chibi --always-yes package --version 1.0 --authors "Debian" \
+           --description "autopkgtest FFI library" autopkgtest/ffi.sld
+test -f autopkgtest-ffi-1.0.tgz
+echo -n .
+
+snow-chibi --always-yes install autopkgtest-ffi-1.0.tgz
+echo -n .
+
+test "$(chibi-scheme -q -e '(import (autopkgtest ffi))' -p '(ffi-add 1 2)')" = "3"
+echo -n .
+
+snow-chibi --always-yes remove autopkgtest.ffi
+if chibi-scheme -q -e '(import (autopkgtest ffi))' 2>/dev/null; then
+    echo "(autopkgtest ffi) still importable after removal" >&2
+    exit 1
+fi
+echo -n .
+
+echo

@@ -1,3 +1,23 @@
+chibi-scheme (0.12-3) unstable; urgency=medium
+
+  * Move generated (chibi snow install) library, which hardcodes the
+    multiarch snow binary module directory, from arch:all
+    chibi-scheme-common to arch:any libchibi-scheme-ffi.  This fixes
+    snow-chibi installing native modules into the build architecture's
+    directory, and hence the snow-chibi autopkgtest failing on all
+    architectures but amd64.
+  * Add snow-chibi-local autopkgtest, which packages, installs, uses and
+    removes a local library with native code, exercising snow-chibi
+    without network access.
+  * Mark snow-chibi autopkgtest, which installs from snow-fort.org, as
+    needs-internet and skippable, skip it when snow-fort.org is
+    unreachable, and drop its unneeded sqlite3 dependency.
+  * Bump to debhelper compat level 14 and drop now-implicit substvars.
+  * Include only architecture.mk in debian/rules.
+  * Export DEB_BUILD_MAINT_OPTIONS so hardening=+all takes effect.
+
+ -- Barak A. Pearlmutter <bap@debian.org>  Thu, 15 Oct 2026 09:49:37 +0100
+
 chibi-scheme (0.12-2) unstable; urgency=medium
 
   [ Debian Janitor ]

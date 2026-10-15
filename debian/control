@@ -3,7 +3,7 @@ Section: lisp
 Maintainer: Debian Scheme Dream Team <debian-scheme@lists.debian.org>
 Uploaders: Barak A. Pearlmutter <bap@debian.org>,
 	   Shriram Ravindranathan <s20n@ters.dev>
-Build-Depends: debhelper-compat (= 13)
+Build-Depends: debhelper-compat (= 14)
 Standards-Version: 4.7.4
 Homepage: https://github.com/ashinn/chibi-scheme
 Vcs-Browser: https://salsa.debian.org/scheme-team/chibi-scheme
@@ -11,7 +11,6 @@ Vcs-Git: https://salsa.debian.org/scheme-team/chibi-scheme.git
 
 Package: chibi-scheme
 Architecture: any
-Depends: ${shlibs:Depends}, ${misc:Depends}
 Recommends: chibi-scheme-common
 Suggests: chibi-scheme-doc
 Description: embeddable Scheme interpreter
@@ -26,7 +25,6 @@ Description: embeddable Scheme interpreter
 Package: chibi-scheme-doc
 Section: doc
 Architecture: all
-Depends: ${misc:Depends}
 Recommends: chibi-scheme
 Multi-Arch: foreign
 Description: embeddable Scheme interpreter (documentation)
@@ -38,7 +36,7 @@ Description: embeddable Scheme interpreter (documentation)
 
 Package: chibi-scheme-common
 Architecture: all
-Depends: libchibi-scheme-ffi (>= 0.9.1), ${misc:Depends}
+Depends: libchibi-scheme-ffi (>= 0.12-3~)
 Description: embeddable Scheme interpreter (standard libraries)
  Chibi-Scheme is a really small embeddable interpreter of R7RS Scheme,
  intended for use as an extension and scripting language in C programs.
@@ -48,7 +46,7 @@ Description: embeddable Scheme interpreter (standard libraries)
 
 Package: chibi-scheme-images
 Architecture: all
-Depends: chibi-scheme-common (= ${source:Version}), ${misc:Depends}, chibi-scheme (>= ${source:Version})
+Depends: chibi-scheme-common (= ${source:Version}), chibi-scheme (>= ${source:Version})
 Description: embeddable Scheme interpreter (standard library images)
  Chibi-Scheme is a really small embeddable interpreter of R7RS Scheme,
  intended for use as an extension and scripting language in C programs.
@@ -59,7 +57,6 @@ Description: embeddable Scheme interpreter (standard library images)
 Package: libchibi-scheme0
 Section: libs
 Architecture: any
-Depends: ${shlibs:Depends}, ${misc:Depends}
 Multi-Arch: same
 Description: embeddable Scheme interpreter (shared library)
  Chibi-Scheme is a really small embeddable interpreter of R7RS Scheme,
@@ -71,7 +68,7 @@ Description: embeddable Scheme interpreter (shared library)
 Package: libchibi-scheme-dev
 Section: libdevel
 Architecture: any
-Depends: libchibi-scheme0 (= ${binary:Version}), ${misc:Depends}
+Depends: libchibi-scheme0 (= ${binary:Version})
 Suggests: chibi-scheme-doc
 Description: embeddable Scheme interpreter (development files)
  Chibi-Scheme is a really small embeddable interpreter of R7RS Scheme,
@@ -84,7 +81,7 @@ Description: embeddable Scheme interpreter (development files)
 Package: libchibi-scheme-ffi
 Section: libs
 Architecture: any
-Depends: ${shlibs:Depends}, ${misc:Depends}
+Breaks: chibi-scheme-common (<< 0.12-3~)
 Recommends: chibi-scheme-common
 Description: embeddable Scheme interpreter (native modules)
  Chibi-Scheme is a really small embeddable interpreter of R7RS Scheme,

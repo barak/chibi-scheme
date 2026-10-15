@@ -1,8 +1,16 @@
 #!/bin/sh
 #
-# Smoke-test of snow-chibi package manager
+# Smoke-test of snow-chibi package manager installing from the
+# snow-fort.org repository
 
 set -eu
+
+if ! chibi-scheme -q -e '(import (chibi net http))' \
+        -e '(close-input-port (http-get "http://snow-fort.org/s/repo.scm"))' \
+        2>/dev/null; then
+    echo "snow-fort.org repository unreachable, skipping" >&2
+    exit 77
+fi
 
 # (chibi sqlite3) contains both Scheme and native code so it's a good
 # candidate for testing all Snow components
